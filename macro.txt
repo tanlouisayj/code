@@ -5,44 +5,40 @@ Sub RefreshIBGHeadcountByMonth()
     Dim targetCol As Long
     Dim templateCol As Long
     Dim monthCell As Range
-    Dim yearVal As String
-    Dim monthVal As String
-    Dim fileName As String
-    Dim filePath As String
-    Dim fullPath As String
-    Dim lastRow As Long
-    Dim newPrefix As String
-    Dim wb As Workbook
-    Dim wbSource As Workbook
+    Dim yearVal As String, monthVal As String
+    Dim fileName As String, filePath As String, fullPath As String
+    Dim lastRow As Long, r As Long
+    Dim newPrefix As String, oldPrefix As String
+    Dim templateCell As Range, targetCell As Range
+    Dim cellFormula As String, pos As Long
+    Dim wb As Workbook, wbSource As Workbook
     Dim alreadyOpen As Boolean
 
     Set wsProductivity = ThisWorkbook.Sheets("Productivity")
-    templateCol = wsProductivity.Columns("CH").Column
+    templateCol = wsProductivity.Columns("CH").Column   ' column 86
 
     ' ---- ASK USER WHICH COLUMN TO UPDATE ----
     userInput = InputBox("Enter the column letter to update (e.g. CI, CJ, CK):" & vbNewLine & vbNewLine & _
                          "Note: CH is the template column and cannot be overwritten.", _
-                         "IBG Headcount Refresh - Select Column")
+                         "Which Column To Update?")
 
     If userInput = "" Then
-        MsgBox "No column entered. Macro cancelled.", vbInformation, "Cancelled"
+        MsgBox "No column entered. Macro cancelled.", vbExclamation, "Cancelled"
         Exit Sub
     End If
 
     userInput = UCase(Trim(userInput))
 
-    ' Validate it's a real column
     On Error Resume Next
-    targetCol = wsProductivity.Columns(userInput).Column
+    targetCol = wsProductivity.Range(userInput & "1").Column
     On Error GoTo 0
 
     If targetCol = 0 Then
-        MsgBox "'" & userInput & "' is not a valid column letter (e.g. CI, CJ, CK).", _
+        MsgBox "'" & userInput & "' is not a valid column. Please enter a valid column letter (e.g. CI, CJ).", _
                vbExclamation, "Invalid Column"
         Exit Sub
     End If
 
-    ' Prevent overwriting template column CH
     If targetCol = templateCol Then
         MsgBox "Column CH is the template column and cannot be overwritten.", _
                vbExclamation, "Invalid Column"
@@ -61,7 +57,7 @@ Sub RefreshIBGHeadcountByMonth()
     yearVal = Format(monthCell.Value, "YYYY")
     monthVal = Format(monthCell.Value, "MM")
 
-    ' ---- CONFIRM WITH USER BEFORE PROCEEDING ----
+    ' ---- CONFIRM ----
     Dim confirm As Integer
     confirm = MsgBox("About to update column " & userInput & " using date: " & monthVal & "/" & yearVal & vbNewLine & vbNewLine & _
                      "File: " & yearVal & monthVal & "_Regional IBG Staff Role Tagging.xlsx" & vbNewLine & _
@@ -78,7 +74,6 @@ Sub RefreshIBGHeadcountByMonth()
     filePath = "\\nassgdce1bvc1\IBG_Reg1&2_Vol1\IBG Reg 1&2\Qlikview\IBG Headcount\" & yearVal & "\"
     fullPath = filePath & fileName
 
-    ' ---- CHECK FILE EXISTS ----
     If Dir(fullPath) = "" Then
         MsgBox "File not found: " & fullPath & vbNewLine & vbNewLine & _
                "Please check the file exists and network drive is accessible.", _
@@ -89,54 +84,64 @@ Sub RefreshIBGHeadcountByMonth()
     Application.ScreenUpdating = False
     Application.DisplayAlerts = False
 
+    ' ---- COPY FORMULAS FROM CH TO TARGET COLUMN ----
+    lastRow = wsProductivity.Cells(wsProductivity.Rows.Count, templateCol).End(xlUp).Row
+    newPrefix = yearVal & monthVal
+
+    ' Work out the column letter for CH and target (for replacing column refs in formulas)
+    Dim templateColLetter As String
+    Dim targetColLetter As String
+    templateColLetter = wsProductivity.Columns(templateCol).Address(False, False)
+    templateColLetter = Left(templateColLetter, InStr(templateColLetter, ":") - 1)  ' e.g. "CH"
+    targetColLetter = wsProductivity.Columns(targetCol).Address(False, False)
+    targetColLetter = Left(targetColLetter, InStr(targetColLetter, ":") - 1)        ' e.g. "CK"
+
+    For r = 1 To lastRow
+        Set templateCell = wsProductivity.Cells(r, templateCol)
+        Set targetCell = wsProductivity.Cells(r, targetCol)
+
+        If templateCell.HasFormula Then
+            cellFormula = templateCell.Formula
+
+            ' Step 1: Replace YYYYMM in filename references
+            If InStr(cellFormula, "_Regional IBG Staff Role Tagging.xlsx") > 0 Then
+                pos = InStr(cellFormula, "_Regional IBG Staff Role Tagging.xlsx")
+                If pos > 6 Then
+                    oldPrefix = Mid(cellFormula, pos - 6, 6)
+                    If IsNumeric(oldPrefix) Then
+                        cellFormula = Replace(cellFormula, oldPrefix, newPrefix)
+                    End If
+                End If
+            End If
+
+            ' Step 2: Replace column references from CH to target column
+            ' e.g. replace "CH" with "CK" in cell references like CH5, $CH$18 etc.
+            ' Use careful replacement to avoid partial matches (e.g. CHOOSE vs CH)
+            cellFormula = ReplaceColumnRef(cellFormula, templateColLetter, targetColLetter)
+
+            targetCell.Formula = cellFormula
+
+        ElseIf Not IsEmpty(templateCell) Then
+            targetCell.Value = templateCell.Value
+        End If
+    Next r
+
     ' ---- OPEN SOURCE FILE ----
     alreadyOpen = False
-    For Each wb In Workbooks
+    For Each wb In Application.Workbooks
         If wb.Name = fileName Then
-            Set wbSource = wb
             alreadyOpen = True
+            Set wbSource = wb
             Exit For
         End If
     Next wb
 
     If Not alreadyOpen Then
-        Set wbSource = Workbooks.Open(fullPath, ReadOnly:=True)
+        Set wbSource = Workbooks.Open(fullPath, ReadOnly:=True, UpdateLinks:=False)
     End If
-
-    ' ---- COPY FORMULAS FROM CH (TEMPLATE) TO TARGET COLUMN ----
-    lastRow = wsProductivity.Cells(wsProductivity.Rows.Count, templateCol).End(xlUp).Row
-    newPrefix = yearVal & monthVal
-
-    Dim r As Long
-    For r = 1 To lastRow
-        Dim srcCell As Range
-        Dim tgtCell As Range
-        Set srcCell = wsProductivity.Cells(r, templateCol)
-        Set tgtCell = wsProductivity.Cells(r, targetCol)
-
-        If srcCell.HasFormula Then
-            Dim oldFormula As String
-            oldFormula = srcCell.Formula
-            ' Replace any YYYYMM in the formula with the new one
-            Dim i As Integer, m As Integer
-            Dim tryYYYYMM As String
-            For i = 2024 To 2030
-                For m = 1 To 12
-                    tryYYYYMM = i & Format(m, "00")
-                    If InStr(oldFormula, tryYYYYMM) > 0 Then
-                        oldFormula = Replace(oldFormula, tryYYYYMM, newPrefix)
-                    End If
-                Next m
-            Next i
-            tgtCell.Formula = oldFormula
-        ElseIf srcCell.Value <> "" Then
-            tgtCell.Value = srcCell.Value
-        End If
-    Next r
 
     Application.CalculateFull
 
-    ' ---- CLOSE SOURCE FILE ----
     If Not alreadyOpen Then
         wbSource.Close SaveChanges:=False
     End If
@@ -144,7 +149,63 @@ Sub RefreshIBGHeadcountByMonth()
     Application.ScreenUpdating = True
     Application.DisplayAlerts = True
 
-    MsgBox "IBG Headcount refreshed for column " & userInput & " (" & monthVal & "/" & yearVal & ")", _
+    MsgBox "Done! Column " & userInput & " updated for " & monthVal & "/" & yearVal, _
            vbInformation, "Refresh Complete"
 
 End Sub
+
+
+' Helper: replace column letter in cell references only (not inside text strings)
+Function ReplaceColumnRef(formula As String, fromCol As String, toCol As String) As String
+    Dim result As String
+    Dim i As Long
+    Dim ch As String
+    result = ""
+    i = 1
+
+    Do While i <= Len(formula)
+        ch = Mid(formula, i, 1)
+
+        ' Skip quoted strings
+        If ch = """" Then
+            result = result & ch
+            i = i + 1
+            Do While i <= Len(formula)
+                ch = Mid(formula, i, 1)
+                result = result & ch
+                i = i + 1
+                If ch = """" Then Exit Do
+            Loop
+            GoTo NextChar
+        End If
+
+        ' Check if this could be our column reference
+        If UCase(Mid(formula, i, Len(fromCol))) = fromCol Then
+            ' Make sure it's followed by a digit or $ (i.e. a cell ref like CH5 or $CH$5)
+            Dim afterPos As Long
+            afterPos = i + Len(fromCol)
+            Dim afterChar As String
+            afterChar = ""
+            If afterPos <= Len(formula) Then afterChar = Mid(formula, afterPos, 1)
+
+            ' And not preceded by a letter (to avoid partial matches like "ACHINE" containing "CH")
+            Dim beforeChar As String
+            beforeChar = ""
+            If i > 1 Then beforeChar = Mid(formula, i - 1, 1)
+
+            If (afterChar >= "0" And afterChar <= "9") Or afterChar = "$" Or afterChar = ":" Then
+                If Not (beforeChar >= "A" And beforeChar <= "Z") And Not (beforeChar >= "a" And beforeChar <= "z") Then
+                    result = result & toCol
+                    i = i + Len(fromCol)
+                    GoTo NextChar
+                End If
+            End If
+        End If
+
+        result = result & ch
+        i = i + 1
+NextChar:
+    Loop
+
+    ReplaceColumnRef = result
+End Function
