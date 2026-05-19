@@ -1,30 +1,95 @@
 Sub RefreshIBGHeadcountByMonth()
 
-    Dim wsSheet As Worksheet
-    Dim dateVal As Date
+    Dim wsProductivity As Worksheet
+    Dim userInput As String
+    Dim targetCol As Long
+    Dim templateCol As Long
+    Dim monthCell As Range
     Dim yearVal As String
     Dim monthVal As String
-    Dim filePath As String
     Dim fileName As String
+    Dim filePath As String
     Dim fullPath As String
+    Dim lastRow As Long
+    Dim newPrefix As String
     Dim wb As Workbook
     Dim wbSource As Workbook
     Dim alreadyOpen As Boolean
 
-    Set wsSheet = ThisWorkbook.Sheets("Productivity")
-    dateVal = wsSheet.Range("CH18").Value
-    yearVal = Year(dateVal)
-    monthVal = Format(Month(dateVal), "00")
+    Set wsProductivity = ThisWorkbook.Sheets("Productivity")
+    templateCol = wsProductivity.Columns("CH").Column
 
+    ' ---- ASK USER WHICH COLUMN TO UPDATE ----
+    userInput = InputBox("Enter the column letter to update (e.g. CI, CJ, CK):" & vbNewLine & vbNewLine & _
+                         "Note: CH is the template column and cannot be overwritten.", _
+                         "IBG Headcount Refresh - Select Column")
+
+    If userInput = "" Then
+        MsgBox "No column entered. Macro cancelled.", vbInformation, "Cancelled"
+        Exit Sub
+    End If
+
+    userInput = UCase(Trim(userInput))
+
+    ' Validate it's a real column
+    On Error Resume Next
+    targetCol = wsProductivity.Columns(userInput).Column
+    On Error GoTo 0
+
+    If targetCol = 0 Then
+        MsgBox "'" & userInput & "' is not a valid column letter (e.g. CI, CJ, CK).", _
+               vbExclamation, "Invalid Column"
+        Exit Sub
+    End If
+
+    ' Prevent overwriting template column CH
+    If targetCol = templateCol Then
+        MsgBox "Column CH is the template column and cannot be overwritten.", _
+               vbExclamation, "Invalid Column"
+        Exit Sub
+    End If
+
+    ' ---- READ DATE FROM ROW 18 OF TARGET COLUMN ----
+    Set monthCell = wsProductivity.Cells(18, targetCol)
+
+    If Not IsDate(monthCell.Value) Then
+        MsgBox "Row 18 of column " & userInput & " does not contain a valid date. Please check.", _
+               vbExclamation, "Invalid Date"
+        Exit Sub
+    End If
+
+    yearVal = Format(monthCell.Value, "YYYY")
+    monthVal = Format(monthCell.Value, "MM")
+
+    ' ---- CONFIRM WITH USER BEFORE PROCEEDING ----
+    Dim confirm As Integer
+    confirm = MsgBox("About to update column " & userInput & " using date: " & monthVal & "/" & yearVal & vbNewLine & vbNewLine & _
+                     "File: " & yearVal & monthVal & "_Regional IBG Staff Role Tagging.xlsx" & vbNewLine & _
+                     "Folder: \IBG Headcount\" & yearVal & "\" & vbNewLine & vbNewLine & _
+                     "Proceed?", vbYesNo + vbQuestion, "Confirm Update")
+
+    If confirm = vbNo Then
+        MsgBox "Macro cancelled.", vbInformation, "Cancelled"
+        Exit Sub
+    End If
+
+    ' ---- BUILD FILE PATH ----
     fileName = yearVal & monthVal & "_Regional IBG Staff Role Tagging.xlsx"
     filePath = "\\nassgdce1bvc1\IBG_Reg1&2_Vol1\IBG Reg 1&2\Qlikview\IBG Headcount\" & yearVal & "\"
     fullPath = filePath & fileName
 
+    ' ---- CHECK FILE EXISTS ----
     If Dir(fullPath) = "" Then
-        MsgBox "File not found: " & fullPath, vbExclamation, "File Missing"
+        MsgBox "File not found: " & fullPath & vbNewLine & vbNewLine & _
+               "Please check the file exists and network drive is accessible.", _
+               vbExclamation, "File Missing"
         Exit Sub
     End If
 
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+
+    ' ---- OPEN SOURCE FILE ----
     alreadyOpen = False
     For Each wb In Workbooks
         If wb.Name = fileName Then
@@ -38,49 +103,48 @@ Sub RefreshIBGHeadcountByMonth()
         Set wbSource = Workbooks.Open(fullPath, ReadOnly:=True)
     End If
 
-    Dim lastCol As Long
-    Dim searchRange As Range
-    Dim cell As Range
-    Dim oldYYYYMM As String
-    Dim newYYYYMM As String
+    ' ---- COPY FORMULAS FROM CH (TEMPLATE) TO TARGET COLUMN ----
+    lastRow = wsProductivity.Cells(wsProductivity.Rows.Count, templateCol).End(xlUp).Row
+    newPrefix = yearVal & monthVal
 
-    newYYYYMM = yearVal & monthVal
-    lastCol = wsSheet.Cells(18, wsSheet.Columns.Count).End(xlToLeft).Column
+    Dim r As Long
+    For r = 1 To lastRow
+        Dim srcCell As Range
+        Dim tgtCell As Range
+        Set srcCell = wsProductivity.Cells(r, templateCol)
+        Set tgtCell = wsProductivity.Cells(r, targetCol)
 
-    If lastCol < wsSheet.Columns("CH").Column Then
-        MsgBox "No formulas found from column CH onwards.", vbInformation
-        GoTo CloseSource
-    End If
-
-    Set searchRange = wsSheet.Range(wsSheet.Columns("CH"), wsSheet.Columns(lastCol))
-
-    For Each cell In searchRange.Cells
-        If cell.HasFormula Then
-            If InStr(cell.Formula, "202") > 0 Then
-                Dim oldFormula As String
-                oldFormula = cell.Formula
-                Dim i As Integer
-                For i = 2024 To 2030
-                    Dim m As Integer
-                    For m = 1 To 12
-                        Dim tryYYYYMM As String
-                        tryYYYYMM = i & Format(m, "00")
-                        If tryYYYYMM <> newYYYYMM And InStr(oldFormula, tryYYYYMM) > 0 Then
-                            cell.Formula = Replace(cell.Formula, tryYYYYMM, newYYYYMM)
-                        End If
-                    Next m
-                Next i
-            End If
+        If srcCell.HasFormula Then
+            Dim oldFormula As String
+            oldFormula = srcCell.Formula
+            ' Replace any YYYYMM in the formula with the new one
+            Dim i As Integer, m As Integer
+            Dim tryYYYYMM As String
+            For i = 2024 To 2030
+                For m = 1 To 12
+                    tryYYYYMM = i & Format(m, "00")
+                    If InStr(oldFormula, tryYYYYMM) > 0 Then
+                        oldFormula = Replace(oldFormula, tryYYYYMM, newPrefix)
+                    End If
+                Next m
+            Next i
+            tgtCell.Formula = oldFormula
+        ElseIf srcCell.Value <> "" Then
+            tgtCell.Value = srcCell.Value
         End If
-    Next cell
+    Next r
 
     Application.CalculateFull
 
-CloseSource:
+    ' ---- CLOSE SOURCE FILE ----
     If Not alreadyOpen Then
         wbSource.Close SaveChanges:=False
     End If
 
-    MsgBox "IBG Headcount refreshed for: " & monthVal & "/" & yearVal, vbInformation, "Refresh Complete"
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+
+    MsgBox "IBG Headcount refreshed for column " & userInput & " (" & monthVal & "/" & yearVal & ")", _
+           vbInformation, "Refresh Complete"
 
 End Sub
