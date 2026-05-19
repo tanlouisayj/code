@@ -1,0 +1,86 @@
+Sub RefreshIBGHeadcountByMonth()
+
+    Dim wsSheet As Worksheet
+    Dim dateVal As Date
+    Dim yearVal As String
+    Dim monthVal As String
+    Dim filePath As String
+    Dim fileName As String
+    Dim fullPath As String
+    Dim wb As Workbook
+    Dim wbSource As Workbook
+    Dim alreadyOpen As Boolean
+
+    Set wsSheet = ThisWorkbook.Sheets("Productivity")
+    dateVal = wsSheet.Range("CH18").Value
+    yearVal = Year(dateVal)
+    monthVal = Format(Month(dateVal), "00")
+
+    fileName = yearVal & monthVal & "_Regional IBG Staff Role Tagging.xlsx"
+    filePath = "\\nassgdce1bvc1\IBG_Reg1&2_Vol1\IBG Reg 1&2\Qlikview\IBG Headcount\" & yearVal & "\"
+    fullPath = filePath & fileName
+
+    If Dir(fullPath) = "" Then
+        MsgBox "File not found: " & fullPath, vbExclamation, "File Missing"
+        Exit Sub
+    End If
+
+    alreadyOpen = False
+    For Each wb In Workbooks
+        If wb.Name = fileName Then
+            Set wbSource = wb
+            alreadyOpen = True
+            Exit For
+        End If
+    Next wb
+
+    If Not alreadyOpen Then
+        Set wbSource = Workbooks.Open(fullPath, ReadOnly:=True)
+    End If
+
+    Dim lastCol As Long
+    Dim searchRange As Range
+    Dim cell As Range
+    Dim oldYYYYMM As String
+    Dim newYYYYMM As String
+
+    newYYYYMM = yearVal & monthVal
+    lastCol = wsSheet.Cells(18, wsSheet.Columns.Count).End(xlToLeft).Column
+
+    If lastCol < wsSheet.Columns("CH").Column Then
+        MsgBox "No formulas found from column CH onwards.", vbInformation
+        GoTo CloseSource
+    End If
+
+    Set searchRange = wsSheet.Range(wsSheet.Columns("CH"), wsSheet.Columns(lastCol))
+
+    For Each cell In searchRange.Cells
+        If cell.HasFormula Then
+            If InStr(cell.Formula, "202") > 0 Then
+                Dim oldFormula As String
+                oldFormula = cell.Formula
+                Dim i As Integer
+                For i = 2024 To 2030
+                    Dim m As Integer
+                    For m = 1 To 12
+                        Dim tryYYYYMM As String
+                        tryYYYYMM = i & Format(m, "00")
+                        If tryYYYYMM <> newYYYYMM And InStr(oldFormula, tryYYYYMM) > 0 Then
+                            cell.Formula = Replace(cell.Formula, tryYYYYMM, newYYYYMM)
+                        End If
+                    Next m
+                Next i
+            End If
+        End If
+    Next cell
+
+    Application.CalculateFull
+
+CloseSource:
+    If Not alreadyOpen Then
+        wbSource.Close SaveChanges:=False
+    End If
+
+    MsgBox "IBG Headcount refreshed for: " & monthVal & "/" & yearVal, vbInformation, "Refresh Complete"
+
+End Sub
