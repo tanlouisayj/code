@@ -18,17 +18,15 @@
 
 Option Explicit
 
-Const SET_WATCH_FOLDER  As String = "B4"
-Const SET_QS_FILE       As String = "B5"
-Const SET_OUTPUT_FOLDER As String = "B6"
-Const SET_EMAIL_TO      As String = "B9"
-Const SET_EMAIL_CC1     As String = "B10"
-Const SET_EMAIL_CC2     As String = "B11"
-Const SET_EMAIL_CC3     As String = "B12"
-Const SET_EMAIL_CC4     As String = "B13"
-Const SET_EMAIL_NAME    As String = "B14"
-Const SET_BASE_MONTH    As String = "B17"
-Const SET_BASE_COL      As String = "B18"
+Const SET_WATCH_FOLDER   As String = "B4"
+Const SET_QS_FILE        As String = "B5"
+Const SET_OUTPUT_FOLDER  As String = "B6"
+Const SET_EMAIL_TO       As String = "B9"
+Const SET_EMAIL_CC       As String = "B10"
+Const SET_EMAIL_GREETING As String = "B11"
+Const SET_EMAIL_NAME     As String = "B12"
+Const SET_BASE_MONTH     As String = "B15"
+Const SET_BASE_COL       As String = "B16"
 
 Const COL_AA As Long = 27  ' YYYYMM — preserved as text
 Const COL_AE As Long = 31
@@ -56,31 +54,23 @@ Private Function WATCH_FOLDER() As String
     WATCH_FOLDER = p
 End Function
 
-Private Function QS_FILE() As String:    QS_FILE = GetSetting(SET_QS_FILE):          End Function
-Private Function EMAIL_TO() As String:   EMAIL_TO = GetSetting(SET_EMAIL_TO):         End Function
-Private Function EMAIL_NAME() As String: EMAIL_NAME = GetSetting(SET_EMAIL_NAME):     End Function
-Private Function BASE_MONTH() As Long:   BASE_MONTH = CLng(GetSetting(SET_BASE_MONTH)): End Function
-Private Function BASE_COL_IDX() As Long: BASE_COL_IDX = CLng(GetSetting(SET_BASE_COL)): End Function
+Private Function QS_FILE() As String:       QS_FILE = GetSetting(SET_QS_FILE):            End Function
+Private Function EMAIL_TO() As String:      EMAIL_TO = GetSetting(SET_EMAIL_TO):           End Function
+Private Function EMAIL_CC() As String:      EMAIL_CC = GetSetting(SET_EMAIL_CC):           End Function
+Private Function EMAIL_NAME() As String:    EMAIL_NAME = GetSetting(SET_EMAIL_NAME):       End Function
+Private Function BASE_MONTH() As Long:      BASE_MONTH = CLng(GetSetting(SET_BASE_MONTH)): End Function
+Private Function BASE_COL_IDX() As Long:    BASE_COL_IDX = CLng(GetSetting(SET_BASE_COL)): End Function
+
+Private Function EMAIL_GREETING() As String
+    Dim g As String: g = GetSetting(SET_EMAIL_GREETING)
+    If g = "" Then g = "All"
+    EMAIL_GREETING = g
+End Function
 
 Private Function OUTPUT_FOLDER() As String
     Dim p As String: p = GetSetting(SET_OUTPUT_FOLDER)
     If Right(p, 1) <> "\" Then p = p & "\"
     OUTPUT_FOLDER = p
-End Function
-
-Private Function BuildCC() As String
-    Dim cc As String: cc = ""
-    Dim ccList As Variant
-    ccList = Array(SET_EMAIL_CC1, SET_EMAIL_CC2, SET_EMAIL_CC3, SET_EMAIL_CC4)
-    Dim i As Long
-    For i = 0 To UBound(ccList)
-        Dim v As String: v = GetSetting(CStr(ccList(i)))
-        If v <> "" Then
-            If cc <> "" Then cc = cc & "; "
-            cc = cc & v
-        End If
-    Next i
-    BuildCC = cc
 End Function
 
 Private Function DefaultPeriod() As String
@@ -116,42 +106,38 @@ Public Sub SetupControlPanel()
     ws.Range("B5").Value = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\QS SQL download.xlsx"
     ws.Range("B6").Value = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\"
 
-    Call AddSH(ws, "A8", "EMAIL RECIPIENTS  (leave unused CC rows blank)")
-    Call AddLbl(ws, "A9",  "Send To  (primary)")
-    Call AddLbl(ws, "A10", "CC 1")
-    Call AddLbl(ws, "A11", "CC 2")
-    Call AddLbl(ws, "A12", "CC 3")
-    Call AddLbl(ws, "A13", "CC 4")
-    Call AddLbl(ws, "A14", "Your Name  (sign-off)")
+    Call AddSH(ws, "A8", "EMAIL RECIPIENTS")
+    Call AddLbl(ws, "A9",  "To  (separate multiple with ;)")
+    Call AddLbl(ws, "A10", "CC  (separate multiple with ; leave blank if none)")
+    Call AddLbl(ws, "A11", "Greeting Name  (used in Hi [name],)")
+    Call AddLbl(ws, "A12", "Your Name  (sign-off)")
     ws.Range("B9").Value  = "stevelim@dbs.com"
-    ws.Range("B10").Value = "kaiyuanwong@dbs.com"
-    ws.Range("B11").Value = "ganeshp@dbs.com"
-    ws.Range("B12").Value = ""
-    ws.Range("B13").Value = ""
-    ws.Range("B14").Value = "Louisa"
+    ws.Range("B10").Value = "kaiyuanwong@dbs.com; ganeshp@dbs.com"
+    ws.Range("B11").Value = "Steve"
+    ws.Range("B12").Value = "Louisa"
 
-    Call AddSH(ws, "A16", "COLUMN MAPPING  (Check duplicate EGs tab)")
-    Call AddLbl(ws, "A17", "Base Month  (maps to Base Column)")
-    Call AddLbl(ws, "A18", "Base Column Index  (Q=17, R=18 ...)")
-    ws.Range("B17").Value = 202601
-    ws.Range("B18").Value = 17
-    ws.Range("C17").Value = "202601 = col Q"
-    ws.Range("C18").Value = "Q=17  R=18  S=19  T=20  U=21  V=22 ..."
-    ws.Range("C17:C18").Font.Color = RGB(120, 120, 120)
-    ws.Range("C17:C18").Font.Italic = True
+    Call AddSH(ws, "A14", "COLUMN MAPPING  (Check duplicate EGs tab)")
+    Call AddLbl(ws, "A15", "Base Month  (maps to Base Column)")
+    Call AddLbl(ws, "A16", "Base Column Index  (Q=17, R=18 ...)")
+    ws.Range("B15").Value = 202601
+    ws.Range("B16").Value = 17
+    ws.Range("C15").Value = "202601 = col Q"
+    ws.Range("C16").Value = "Q=17  R=18  S=19  T=20  U=21  V=22 ..."
+    ws.Range("C15:C16").Font.Color = RGB(120, 120, 120)
+    ws.Range("C15:C16").Font.Italic = True
 
-    ws.Range("B4:B6,B9:B14,B17:B18").Interior.Color = RGB(255, 255, 180)
+    ws.Range("B4:B6,B9:B12,B15:B16").Interior.Color = RGB(255, 255, 180)
     ws.Columns("A").ColumnWidth = 42
     ws.Columns("B").ColumnWidth = 72
     ws.Columns("C").ColumnWidth = 28
 
-    Call AddSH(ws, "A20", "ACTIONS")
-    ws.Range("A21").Value = "Click a button:"
-    ws.Range("A21").Font.Color = RGB(100, 100, 100)
+    Call AddSH(ws, "A18", "ACTIONS")
+    ws.Range("A19").Value = "Click a button:"
+    ws.Range("A19").Font.Color = RGB(100, 100, 100)
 
     Dim btnRun As Shape
     Set btnRun = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
-        ws.Range("B22").Left, ws.Range("B22").Top, 200, 38)
+        ws.Range("B20").Left, ws.Range("B20").Top, 200, 38)
     With btnRun
         .TextFrame.Characters.Text = "Run PF Pipeline"
         .TextFrame.Characters.Font.Size = 11
@@ -164,7 +150,7 @@ Public Sub SetupControlPanel()
 
     Dim btnClear As Shape
     Set btnClear = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
-        ws.Range("B24").Left, ws.Range("B24").Top, 200, 38)
+        ws.Range("B22").Left, ws.Range("B22").Top, 200, 38)
     With btnClear
         .TextFrame.Characters.Text = "Clear Log"
         .TextFrame.Characters.Font.Size = 11
@@ -175,10 +161,10 @@ Public Sub SetupControlPanel()
         .OnAction = "ClearLog"
     End With
 
-    ws.Range("A26:G26").Merge
-    ws.Range("A26").Value = "TIP: Update yellow cells when paths change (e.g. new 2027 folder). No VBA editing needed."
-    ws.Range("A26").Font.Color = RGB(0, 128, 0)
-    ws.Range("A26").Font.Italic = True
+    ws.Range("A24:G24").Merge
+    ws.Range("A24").Value = "TIP: Update yellow cells when paths change (e.g. new 2027 folder). No VBA editing needed."
+    ws.Range("A24").Font.Color = RGB(0, 128, 0)
+    ws.Range("A24").Font.Italic = True
     ws.Activate
     MsgBox "Control panel ready! Fill yellow cells then click Run PF Pipeline.", vbInformation, "Setup Complete"
 End Sub
@@ -297,7 +283,7 @@ Public Sub RunPipelineManual()
 
     If MsgBox("Process " & MonthLabel(yyyymm) & " (" & yyyymm & ")?" & vbNewLine & vbNewLine & _
               "To:  " & EMAIL_TO() & vbNewLine & _
-              "CC:  " & BuildCC() & vbNewLine & vbNewLine & _
+              "CC:  " & EMAIL_CC() & vbNewLine & vbNewLine & _
               "Draft email will open for review. Proceed?", _
               vbYesNo + vbQuestion, "PF Automation") = vbNo Then Exit Sub
 
@@ -311,7 +297,7 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
 
     Call InitLog(yyyymm)
     Call WriteLog(yyyymm, "Pipeline", "INFO", "Starting " & MonthLabel(yyyymm) & " (" & yyyymm & ")")
-    Call WriteLog(yyyymm, "Settings", "INFO", "To: " & EMAIL_TO() & "  CC: " & BuildCC())
+    Call WriteLog(yyyymm, "Settings", "INFO", "To: " & EMAIL_TO() & "  CC: " & EMAIL_CC())
 
     Dim srcWb As Workbook, srcWs As Worksheet
     Dim qsWb  As Workbook, qsWs  As Worksheet
@@ -702,7 +688,7 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
     End If
 
     ' Collect movements — skip any row where column A contains "total"
-    ' Use customer name from column A (first non-empty col in data rows)
+    ' Use customer name from column B
     Dim names() As String, moves() As Double, count As Long: count = 0
     For r = headerRow + 1 To UBound(pvData,1)
         Dim rowLabel As String: rowLabel = ""
@@ -710,6 +696,10 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
         ' Skip blank rows and any row containing "total" (subtotals, grand total etc)
         If rowLabel = "" Then GoTo NextRow
         If InStr(1, LCase(rowLabel), "total") > 0 Then GoTo NextRow
+        ' Use column B for customer name
+        Dim custName As String: custName = ""
+        If Not IsEmpty(pvData(r,2)) Then custName = Trim(CStr(pvData(r,2)))
+        If custName = "" Then custName = rowLabel  ' fallback to col A if col B empty
         Dim currVal As Double, prevVal As Double
         currVal = 0: prevVal = 0
         If IsNumeric(pvData(r, currCol)) Then currVal = CDbl(pvData(r, currCol))
@@ -718,7 +708,7 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
         If mv <> 0 Then
             count = count + 1
             ReDim Preserve names(1 To count): ReDim Preserve moves(1 To count)
-            names(count) = rowLabel: moves(count) = mv
+            names(count) = custName: moves(count) = mv
         End If
 NextRow:
     Next r
@@ -775,7 +765,7 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
     Set olApp  = CreateObject("Outlook.Application")
     Set olMail = olApp.CreateItem(0)
     Dim body As String
-    body = "Hi Steve," & vbNewLine & vbNewLine & _
+    body = "Hi " & EMAIL_GREETING() & "," & vbNewLine & vbNewLine & _
            "Please find attached the updated PF Caselist - " & _
            "EOP Asset Balance and Total Income by Country." & _
            vbNewLine & vbNewLine & _
@@ -783,7 +773,7 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
            "Best regards," & vbNewLine & EMAIL_NAME()
     With olMail
         .To      = EMAIL_TO()
-        .CC      = BuildCC()
+        .CC      = EMAIL_CC()
         .Subject = "PF " & MonthLabel(yyyymm) & _
                    " Caselist - EOP Asset Balance and Total Income by Country"
         .Body    = body
