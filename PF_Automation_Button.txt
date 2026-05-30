@@ -338,6 +338,12 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     srcWb.Close False
     Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "OK", copyCount & " rows pasted.")
 
+    ' Edge case: Trafigura manual row entry
+    Application.ScreenUpdating = True
+    Call WriteLog(yyyymm, "Edge Case - Trafigura", "INFO", "Checking for Trafigura PTE LTD edge case...")
+    Call HandleTrafiguraEdgeCase(qsWs, yyyymm)
+    Call WriteLog(yyyymm, "Edge Case - Trafigura", "OK", "Trafigura check complete.")
+
     ' Step 5: Formulas
     Dim lookupCol As String: lookupCol = GetLookupCol(yyyymm)
     Call WriteLog(yyyymm, "Step 5/7 - Formulas", "RUNNING", "AE/AF. Lookup col = " & lookupCol)
@@ -714,54 +720,59 @@ NextRow:
         GetMomContributors = label & ": no MoM movement detected.": Exit Function
     End If
 
-    ' Calculate net total movement across all contributors
+    ' Calculate net total movement
     Dim totalMove As Double: totalMove = 0
     For r = 1 To count
         totalMove = totalMove + moves(r)
     Next r
 
-    ' Filter to same direction as total movement only
-    Dim filtNames() As String, filtMoves() As Double, filtCount As Long
-    filtCount = 0
+    ' Split into same-direction and opposite-direction arrays
+    Dim sameN() As String, sameM() As Double, sameCnt As Long: sameCnt = 0
+    Dim oppN()  As String, oppM()  As Double, oppCnt  As Long: oppCnt  = 0
+
     For r = 1 To count
-        If totalMove >= 0 And moves(r) > 0 Then
-            filtCount = filtCount + 1
-            ReDim Preserve filtNames(1 To filtCount)
-            ReDim Preserve filtMoves(1 To filtCount)
-            filtNames(filtCount) = names(r)
-            filtMoves(filtCount) = moves(r)
-        ElseIf totalMove < 0 And moves(r) < 0 Then
-            filtCount = filtCount + 1
-            ReDim Preserve filtNames(1 To filtCount)
-            ReDim Preserve filtMoves(1 To filtCount)
-            filtNames(filtCount) = names(r)
-            filtMoves(filtCount) = moves(r)
+        If (totalMove >= 0 And moves(r) > 0) Or (totalMove < 0 And moves(r) < 0) Then
+            sameCnt = sameCnt + 1
+            ReDim Preserve sameN(1 To sameCnt): ReDim Preserve sameM(1 To sameCnt)
+            sameN(sameCnt) = names(r): sameM(sameCnt) = moves(r)
+        Else
+            oppCnt = oppCnt + 1
+            ReDim Preserve oppN(1 To oppCnt): ReDim Preserve oppM(1 To oppCnt)
+            oppN(oppCnt) = names(r): oppM(oppCnt) = moves(r)
         End If
     Next r
 
-    If filtCount = 0 Then
-        GetMomContributors = label & ": no same-direction contributors found.": Exit Function
+    ' Sort each group by absolute value descending
+    Dim j As Long, tn As String, tm As Double
+    If sameCnt > 1 Then
+        For r = 1 To sameCnt - 1
+            For j = 1 To sameCnt - r
+                If Abs(sameM(j)) < Abs(sameM(j+1)) Then
+                    tn = sameN(j): tm = sameM(j)
+                    sameN(j) = sameN(j+1): sameM(j) = sameM(j+1)
+                    sameN(j+1) = tn: sameM(j+1) = tm
+                End If
+            Next j
+        Next r
+    End If
+    If oppCnt > 1 Then
+        For r = 1 To oppCnt - 1
+            For j = 1 To oppCnt - r
+                If Abs(oppM(j)) < Abs(oppM(j+1)) Then
+                    tn = oppN(j): tm = oppM(j)
+                    oppN(j) = oppN(j+1): oppM(j) = oppM(j+1)
+                    oppN(j+1) = tn: oppM(j+1) = tm
+                End If
+            Next j
+        Next r
     End If
 
-    ' Sort filtered contributors by absolute value descending
-    Dim j As Long, tn As String, tm As Double
-    For r = 1 To filtCount - 1
-        For j = 1 To filtCount - r
-            If Abs(filtMoves(j)) < Abs(filtMoves(j+1)) Then
-                tn = filtNames(j): tm = filtMoves(j)
-                filtNames(j) = filtNames(j+1): filtMoves(j) = filtMoves(j+1)
-                filtNames(j+1) = tn: filtMoves(j+1) = tm
-            End If
-        Next j
-    Next r
-
-    ' absTotal = sum of same-direction moves (for % calculation)
+    ' absTotal = sum of ALL absolute movements (basis for % and 80% threshold)
     Dim absTotal As Double: absTotal = 0
-    For r = 1 To filtCount
-        absTotal = absTotal + Abs(filtMoves(r))
+    For r = 1 To count
+        absTotal = absTotal + Abs(moves(r))
     Next r
 
-    ' Direction label
     Dim dirLabel As String
     dirLabel = IIf(totalMove >= 0, "increase", "decline")
 
@@ -770,18 +781,33 @@ NextRow:
              Format(totalMove, "+#,##0;-#,##0") & vbNewLine & _
              "Key contributors to " & dirLabel & " (>=80%):" & vbNewLine
 
-    ' Accumulate until >=80% of same-direction movement explained
+    ' Accumulate same-direction first
     Dim cumulative As Double: cumulative = 0
-    For r = 1 To filtCount
-        ' Percentage = share of same-direction total, always shown as positive
-        Dim pct As Double
-        pct = IIf(absTotal > 0, Abs(filtMoves(r)) / absTotal * 100, 0)
-        result = result & "  - " & filtNames(r) & ": " & _
-                 Format(filtMoves(r), "+#,##0;-#,##0") & _
+    Dim pct As Double
+
+    For r = 1 To sameCnt
+        pct = IIf(absTotal > 0, Abs(sameM(r)) / absTotal * 100, 0)
+        result = result & "  - " & sameN(r) & ": " & _
+                 Format(sameM(r), "+#,##0;-#,##0") & _
                  " (" & Format(pct, "0.0") & "%)" & vbNewLine
-        cumulative = cumulative + Abs(filtMoves(r))
-        If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
+        cumulative = cumulative + Abs(sameM(r))
+        If absTotal > 0 And cumulative / absTotal >= 0.8 Then GoTo DoneMoM
     Next r
+
+    ' If 80% not yet reached, add opposite-direction contributors with "(offsetting)" label
+    If oppCnt > 0 Then
+        result = result & "  Offsetting contributors:" & vbNewLine
+        For r = 1 To oppCnt
+            pct = IIf(absTotal > 0, Abs(oppM(r)) / absTotal * 100, 0)
+            result = result & "  - " & oppN(r) & ": " & _
+                     Format(oppM(r), "+#,##0;-#,##0") & _
+                     " (" & Format(pct, "0.0") & "%)" & vbNewLine
+            cumulative = cumulative + Abs(oppM(r))
+            If absTotal > 0 And cumulative / absTotal >= 0.8 Then GoTo DoneMoM
+        Next r
+    End If
+
+DoneMoM:
 
     GetMomContributors = result
     Exit Function
@@ -811,6 +837,89 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
         .Attachments.Add attachPath
         .Display
     End With
+End Sub
+
+'─── TRAFIGURA EDGE CASE ───────────────────────────────────────────────────────
+
+Private Sub HandleTrafiguraEdgeCase(qsWs As Worksheet, yyyymm As Long)
+    Const TRAF_COL As Long = 3  ' Column C
+
+    ' Find most recent existing Trafigura row (not from current period)
+    Dim lastRow As Long: lastRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row
+    Dim trafRow As Long:   trafRow = 0
+    Dim trafMM  As Long:   trafMM  = 0
+    Dim i As Long
+
+    For i = 2 To lastRow
+        If InStr(1, LCase(CStr(qsWs.Cells(i, TRAF_COL).Value)), "trafigura") > 0 Then
+            If IsNumeric(qsWs.Cells(i, COL_AA).Value) Then
+                Dim rowMM As Long: rowMM = CLng(qsWs.Cells(i, COL_AA).Value)
+                If rowMM <> yyyymm And rowMM > trafMM Then
+                    trafMM  = rowMM
+                    trafRow = i
+                End If
+            End If
+        End If
+    Next i
+
+    If trafRow = 0 Then
+        MsgBox "No existing TRAFIGURA PTE LTD row found to copy from. Skipping.", vbInformation, "Trafigura Edge Case"
+        Exit Sub
+    End If
+
+    ' Ask user
+    If MsgBox("TRAFIGURA PTE LTD edge case detected." & vbNewLine & vbNewLine & _
+              "A row will be copied from period " & trafMM & " and added for " & yyyymm & "." & vbNewLine & _
+              "You will then be prompted to enter 5 values." & vbNewLine & vbNewLine & _
+              "Proceed?", vbYesNo + vbQuestion, "Trafigura Edge Case") = vbNo Then Exit Sub
+
+    ' Copy row to new row at bottom
+    Dim newRow As Long: newRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row + 1
+    qsWs.Rows(trafRow).Copy
+    qsWs.Cells(newRow, 1).PasteSpecial xlPasteValues
+    Application.CutCopyMode = False
+
+    ' Set column AA to current YYYYMM as text
+    qsWs.Cells(newRow, COL_AA).NumberFormat = "@"
+    qsWs.Cells(newRow, COL_AA).Value = CStr(yyyymm)
+
+    ' Prompt user for 5 editable values
+    Dim colLabels(1 To 5) As String
+    Dim colNums(1 To 5)   As Long
+    colLabels(1) = "V  — MTD NII amt (SGD)"
+    colLabels(2) = "W  — MTD NII on Assets (SGD)"
+    colLabels(3) = "AB — MTD Total Income (SGD)"
+    colLabels(4) = "AC — EOP Asset Balance (SGD)"
+    colLabels(5) = "AD — PRODUCT Avg Asset Balance (SGD)"
+    colNums(1)   = 22   ' V
+    colNums(2)   = 23   ' W
+    colNums(3)   = 28   ' AB
+    colNums(4)   = 29   ' AC
+    colNums(5)   = 30   ' AD
+
+    Dim k As Long
+    For k = 1 To 5
+        Dim copiedVal As String
+        copiedVal = CStr(qsWs.Cells(newRow, colNums(k)).Value)
+
+        Dim userVal As String
+        userVal = InputBox("TRAFIGURA PTE LTD  —  Period: " & yyyymm & vbNewLine & vbNewLine & _
+                           "Column " & colLabels(k) & vbNewLine & _
+                           "Copied value: " & copiedVal & vbNewLine & vbNewLine & _
+                           "Enter new value (or leave as is and click OK to keep copied value):", _
+                           "Trafigura — " & colLabels(k), copiedVal)
+
+        ' If user clicked Cancel, keep copied value. If entered something, update.
+        If StrPtr(userVal) <> 0 Then   ' 0 = user clicked Cancel
+            If IsNumeric(userVal) Then
+                qsWs.Cells(newRow, colNums(k)).Value = CDbl(userVal)
+            Else
+                qsWs.Cells(newRow, colNums(k)).Value = userVal
+            End If
+        End If
+    Next k
+
+    MsgBox "Trafigura row added for " & yyyymm & ". Pipeline will continue.", vbInformation, "Trafigura Done"
 End Sub
 
 '─── HELPERS ───────────────────────────────────────────────────────────────────
