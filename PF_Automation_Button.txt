@@ -596,28 +596,35 @@ Private Sub FormatOutputSheet(ws As Worksheet)
     ws.Rows("1:3").Delete
 
     Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count,1).End(xlUp).Row
-    Dim lastCol As Long: lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+
+    ' Find true last column by scanning all rows (not just row 1)
+    Dim lastCol As Long: lastCol = 1
+    Dim r As Long, c As Long
+    For r = 1 To Application.Min(10, lastRow)
+        Dim rowLastCol As Long
+        rowLastCol = ws.Cells(r, ws.Columns.Count).End(xlToLeft).Column
+        If rowLastCol > lastCol Then lastCol = rowLastCol
+    Next r
     If lastCol < 1 Then lastCol = 1
 
-    ' Row 1 (was row 4): light blue header — RGB(192,230,245) = #C0E6F5
+    ' Row 1: light blue RGB(192,230,245) = #C0E6F5, black font, bold
     With ws.Range(ws.Cells(1,1), ws.Cells(1, lastCol))
         .Font.Bold = True
-        .Font.Color = RGB(0, 0, 0)         ' black font
-        .Interior.Color = RGB(192, 230, 245) ' light blue #C0E6F5
+        .Font.Color = RGB(0, 0, 0)
+        .Interior.Color = RGB(192, 230, 245)
     End With
 
-    ' Row 2 (was row 5): column header — red RGB(192,0,0), white font
+    ' Row 2: red RGB(192,0,0), white font, bold
     With ws.Range(ws.Cells(2,1), ws.Cells(2, lastCol))
         .Font.Bold = True
-        .Font.Color = RGB(255, 255, 255)   ' white font
-        .Interior.Color = RGB(192, 0, 0)   ' red
+        .Font.Color = RGB(255, 255, 255)
+        .Interior.Color = RGB(192, 0, 0)
     End With
 
-    ' Bold columns A and B throughout (rows 1 to lastRow)
+    ' Bold columns A and B throughout
     ws.Range(ws.Cells(1,1), ws.Cells(lastRow,2)).Font.Bold = True
 
-    ' Bold all rows containing "total" (from row 3 onwards)
-    Dim r As Long, c As Long
+    ' Bold all rows containing "total" from row 3 onwards
     For r = 3 To lastRow
         For c = 1 To lastCol
             If Not IsEmpty(ws.Cells(r,c).Value) Then
@@ -629,11 +636,14 @@ Private Sub FormatOutputSheet(ws As Worksheet)
         Next c
     Next r
 
-    ' Autofit all columns, no wrap
+    ' Autofit all columns with minimum width for number columns
     ws.Cells.WrapText = False
     Dim col As Long
     For col = 1 To lastCol
         ws.Columns(col).AutoFit
+        If ws.Columns(col).ColumnWidth < 12 Then
+            ws.Columns(col).ColumnWidth = 12
+        End If
     Next col
 End Sub
 
@@ -742,7 +752,7 @@ NextRow:
     For r = 1 To count
         Dim pct As Double
         pct = IIf(totalMove <> 0, moves(r) / totalMove * 100, 0)
-        result = result & "  " & IIf(moves(r) >= 0, Chr(9650), Chr(9660)) & " " & _
+        result = result & "  " & IIf(moves(r) >= 0, "UP", "DN") & " " & _
                  names(r) & ": " & Format(moves(r), "+#,##0;-#,##0") & _
                  " (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
         cumulative = cumulative + Abs(moves(r))
