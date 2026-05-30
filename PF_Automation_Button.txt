@@ -452,6 +452,11 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     Call WriteLog(yyyymm, "Email", "OK", "Draft open. Review and send.")
     Call WriteLog(yyyymm, "Pipeline", "OK", "ALL COMPLETE for " & MonthLabel(yyyymm) & " ✓")
 
+    ' Auto-clear Trafigura cells so they don't carry over next month
+    On Error Resume Next
+    ThisWorkbook.Sheets(SETTINGS_SHEET).Range("B28:B32").ClearContents
+    On Error GoTo 0
+
     Application.DisplayAlerts = True: Application.ScreenUpdating = True
     MsgBox "Complete for " & MonthLabel(yyyymm) & "!" & vbNewLine & vbNewLine & _
            outPath & vbNewLine & vbNewLine & "Draft email open — review and send.", _
@@ -1084,8 +1089,7 @@ Private Sub HandleTrafiguraEdgeCase(qsWs As Worksheet, yyyymm As Long)
     Next k
 
     ' Remind user to clear the cells
-    MsgBox "Trafigura row added for " & yyyymm & " using Sheet1 values." & vbNewLine & vbNewLine & _
-           "Remember to clear the Trafigura cells on Sheet1 after this run.", _
+    MsgBox "Trafigura row added for " & yyyymm & " using Sheet1 values.", _
            vbInformation, "Trafigura Done"
 End Sub
 
