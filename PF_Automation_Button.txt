@@ -1,27 +1,29 @@
 '=============================================================================
-' PF CASELIST AUTOMATION - MANUAL TRIGGER VERSION WITH LIVE LOG
+' PF CASELIST AUTOMATION - MANUAL TRIGGER VERSION WITH LIVE LOG (v3)
 '=============================================================================
 ' HOW TO SET UP:
 '   1. Open Excel, Save As > PF_Automation.xlsm (macro-enabled workbook)
 '   2. Press Alt+F11 to open VBA Editor
-'   3. Insert > Module, paste ALL of this code in
-'   4. Close VBA Editor and save
-'   5. On Sheet1, go to Insert > Shapes, draw a rectangle button
-'   6. Right-click the shape > Assign Macro > select "RunPipelineManual"
-'   7. Label the button "Run PF Pipeline"
-'   8. A "Log" sheet will be created automatically on first run
+'   3. In left panel: Insert > Module
+'   4. Select ALL existing code in module and DELETE it
+'   5. Paste ALL of this code in
+'   6. Close VBA Editor and save
+'   7. On Sheet1: Insert > Shapes > draw a rectangle
+'   8. Right-click shape > Assign Macro > RunPipelineManual
+'   9. Label button "Run PF Pipeline"
 '
 ' HOW TO USE EACH MONTH:
-'   1. Drop YYYYMM.xlsx into the Automation folder
-'   2. Open PF_Automation.xlsm
-'   3. Click "Run PF Pipeline" button
-'   4. Type the period (e.g. 202605) when prompted
-'   5. Watch the Log sheet update live as each step runs
+'   1. Drop YYYYMM.xlsx (e.g. 202604.xlsx) into the Automation folder
+'   2. Make sure QS SQL download.xlsx is CLOSED
+'   3. Open PF_Automation.xlsm and click "Run PF Pipeline"
+'   4. Type the period when prompted (e.g. 202604)
+'   5. Watch the Log sheet update live
+'   6. Review draft email in Outlook and hit Send
 '=============================================================================
 
 Option Explicit
 
-'─── CONFIGURATION ────────────────────────────────────────────────────────────
+'─── CONFIGURATION ─────────────────────────────────────────────────────────────
 Const WATCH_FOLDER  As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
 Const QS_FILE       As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\QS SQL download.xlsx"
 Const OUTPUT_FOLDER As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\"
@@ -30,15 +32,14 @@ Const EMAIL_TO   As String = "stevelim@dbs.com"
 Const EMAIL_CC   As String = "kaiyuanwong@dbs.com; ganeshp@dbs.com"
 Const EMAIL_NAME As String = "Louisa"
 
-' Column mapping: 202601=Q(17), 202602=R(18), 202603=S(19), 202604=T(20), 202605=U(21)...
+' Column mapping in Check duplicate EGs: 202601=Q(17), 202602=R(18) etc.
 Const BASE_MONTH   As Long = 202601
-Const BASE_COL_IDX As Long = 17   ' Q = 17
+Const BASE_COL_IDX As Long = 17
 
-' Column positions in QS data (1-indexed, A=1)
+' Column positions in QS data tab (1-indexed, A=1)
 Const COL_AA As Long = 27
 Const COL_AE As Long = 31
 Const COL_AF As Long = 32
-Const COL_Q  As Long = 17
 Const COL_F  As Long = 6
 Const COL_E  As Long = 5
 Const COL_N  As Long = 14
@@ -48,12 +49,10 @@ Const CHECK_DUP_TAB As String = "Check duplicate EGs"
 Const PIVOT_TAB     As String = "Caselist Pivots"
 Const LOG_SHEET     As String = "Log"
 
-'─── LOG HELPERS ──────────────────────────────────────────────────────────────
+'─── LOG FUNCTIONS ─────────────────────────────────────────────────────────────
 
-Private Sub InitLog(yyyymm As Long)
+Private Function GetLogSheet() As Worksheet
     Dim ws As Worksheet
-
-    ' Create Log sheet if it doesn't exist
     On Error Resume Next
     Set ws = ThisWorkbook.Sheets(LOG_SHEET)
     On Error GoTo 0
@@ -61,43 +60,43 @@ Private Sub InitLog(yyyymm As Long)
     If ws Is Nothing Then
         Set ws = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
         ws.Name = LOG_SHEET
-    End If
-
-    ' Set up headers if sheet is empty
-    If ws.Cells(1, 1).Value = "" Then
         ws.Cells(1, 1).Value = "Timestamp"
         ws.Cells(1, 2).Value = "Period"
         ws.Cells(1, 3).Value = "Step"
         ws.Cells(1, 4).Value = "Status"
         ws.Cells(1, 5).Value = "Message"
         ws.Rows(1).Font.Bold = True
-        ws.Columns("A").ColumnWidth = 20
+        ws.Columns("A").ColumnWidth = 22
         ws.Columns("B").ColumnWidth = 10
-        ws.Columns("C").ColumnWidth = 35
+        ws.Columns("C").ColumnWidth = 30
         ws.Columns("D").ColumnWidth = 10
-        ws.Columns("E").ColumnWidth = 60
+        ws.Columns("E").ColumnWidth = 80
     End If
 
-    ' Add separator row for new run
+    Set GetLogSheet = ws
+End Function
+
+Private Sub InitLog(yyyymm As Long)
+    Dim ws As Worksheet
+    Set ws = GetLogSheet()
+
     Dim nextRow As Long
     nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+
     ws.Cells(nextRow, 1).Value = "── NEW RUN ──"
     ws.Cells(nextRow, 2).Value = yyyymm
     ws.Cells(nextRow, 1).Font.Bold = True
-    ws.Cells(nextRow, 1).Interior.Color = RGB(200, 200, 200)
-    ws.Cells(nextRow, 2).Interior.Color = RGB(200, 200, 200)
+    ws.Cells(nextRow, 1).Interior.Color = RGB(180, 180, 180)
+    ws.Cells(nextRow, 2).Interior.Color = RGB(180, 180, 180)
 
-    ' Switch to log sheet so user can watch
     ws.Activate
     Application.ScreenUpdating = True
+    DoEvents
 End Sub
 
 Private Sub WriteLog(yyyymm As Long, stepName As String, status As String, msg As String)
     Dim ws As Worksheet
-    On Error Resume Next
-    Set ws = ThisWorkbook.Sheets(LOG_SHEET)
-    On Error GoTo 0
-    If ws Is Nothing Then Exit Sub
+    Set ws = GetLogSheet()
 
     Dim nextRow As Long
     nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
@@ -108,37 +107,31 @@ Private Sub WriteLog(yyyymm As Long, stepName As String, status As String, msg A
     ws.Cells(nextRow, 4).Value = status
     ws.Cells(nextRow, 5).Value = msg
 
-    ' Colour by status
     Select Case UCase(status)
-        Case "RUNNING"
-            ws.Cells(nextRow, 4).Interior.Color = RGB(255, 255, 180)  ' Yellow
-        Case "OK"
-            ws.Cells(nextRow, 4).Interior.Color = RGB(180, 255, 180)  ' Green
-        Case "ERROR"
-            ws.Cells(nextRow, 4).Interior.Color = RGB(255, 180, 180)  ' Red
-        Case "INFO"
-            ws.Cells(nextRow, 4).Interior.Color = RGB(180, 220, 255)  ' Blue
+        Case "RUNNING": ws.Cells(nextRow, 4).Interior.Color = RGB(255, 255, 180)
+        Case "OK":      ws.Cells(nextRow, 4).Interior.Color = RGB(180, 255, 180)
+        Case "ERROR":   ws.Cells(nextRow, 4).Interior.Color = RGB(255, 180, 180)
+        Case "INFO":    ws.Cells(nextRow, 4).Interior.Color = RGB(180, 220, 255)
     End Select
 
-    ' Scroll to latest row
-    ws.Cells(nextRow, 1).Select
+    Application.Goto ws.Cells(nextRow, 1)
     Application.ScreenUpdating = True
     DoEvents
 End Sub
 
-'─── BUTTON ENTRY POINT ───────────────────────────────────────────────────────
+'─── BUTTON ENTRY POINT ────────────────────────────────────────────────────────
 
 Public Sub RunPipelineManual()
     Dim periodInput As String
-    periodInput = InputBox("Enter the period to process (e.g. 202605):", "PF Automation", Format(Now, "YYYYMM"))
+    periodInput = InputBox("Enter the period to process (e.g. 202604):", "PF Automation", Format(Now, "YYYYMM"))
 
     If periodInput = "" Then
         MsgBox "Cancelled.", vbInformation
         Exit Sub
     End If
 
-    If Not IsNumeric(periodInput) Or Len(periodInput) <> 6 Then
-        MsgBox "Invalid period. Please enter 6 digits e.g. 202605.", vbCritical
+    If Not IsNumeric(periodInput) Or Len(Trim(periodInput)) <> 6 Then
+        MsgBox "Invalid period. Please enter exactly 6 digits e.g. 202604.", vbCritical
         Exit Sub
     End If
 
@@ -148,25 +141,35 @@ Public Sub RunPipelineManual()
     Dim mo As Long
     mo = yyyymm Mod 100
     If mo < 1 Or mo > 12 Then
-        MsgBox "Invalid month in period " & yyyymm & ". Month must be 01-12.", vbCritical
+        MsgBox "Invalid month in " & yyyymm & ". Month must be 01-12.", vbCritical
         Exit Sub
     End If
 
+    ' Check source file exists
     Dim srcPath As String
     srcPath = WATCH_FOLDER & periodInput & ".xlsx"
-
     If Dir(srcPath) = "" Then
         MsgBox "Source file not found:" & vbNewLine & srcPath & vbNewLine & vbNewLine & _
-               "Please drop " & periodInput & ".xlsx into the Automation folder first.", vbCritical
+               "Please drop " & periodInput & ".xlsx into:" & vbNewLine & WATCH_FOLDER, vbCritical
         Exit Sub
     End If
 
+    ' Check QS file is not already open
+    Dim wb As Workbook
+    For Each wb In Workbooks
+        If InStr(1, LCase(wb.FullName), LCase("QS SQL download")) > 0 Then
+            MsgBox "Please close 'QS SQL download.xlsx' before running the macro.", vbCritical
+            Exit Sub
+        End If
+    Next wb
+
+    ' Confirm
     Dim confirm As Integer
-    confirm = MsgBox("Ready to process period " & yyyymm & "." & vbNewLine & vbNewLine & _
+    confirm = MsgBox("Ready to process period " & MonthLabel(yyyymm) & " (" & yyyymm & ")." & vbNewLine & vbNewLine & _
                      "Source:  " & srcPath & vbNewLine & _
                      "QS File: " & QS_FILE & vbNewLine & _
                      "Output:  " & OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & " Caselist..." & vbNewLine & vbNewLine & _
-                     "Draft email will open for review before sending." & vbNewLine & vbNewLine & _
+                     "A draft email will open in Outlook for your review." & vbNewLine & vbNewLine & _
                      "Proceed?", vbYesNo + vbQuestion, "PF Automation")
 
     If confirm = vbNo Then Exit Sub
@@ -174,72 +177,74 @@ Public Sub RunPipelineManual()
     Call RunPipeline(srcPath, yyyymm)
 End Sub
 
-'─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+'─── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
 Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     Application.DisplayAlerts = False
 
     Call InitLog(yyyymm)
-    Call WriteLog(yyyymm, "Pipeline", "INFO", "Starting pipeline for period " & yyyymm)
+    Call WriteLog(yyyymm, "Pipeline", "INFO", "Starting pipeline for " & MonthLabel(yyyymm) & " (" & yyyymm & ")")
+
+    Dim srcWb As Workbook
+    Dim srcWs As Worksheet
+    Dim qsWb  As Workbook
+    Dim qsWs  As Worksheet
 
     On Error GoTo PipelineError
 
-    '── Step 1: Validate source file ──────────────────────────────────────────
-    Call WriteLog(yyyymm, "Step 1/7 - Validate", "RUNNING", "Opening source file: " & srcPath)
-    Dim srcWb As Workbook
+    '── Step 1: Validate source file ───────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 1/7 - Validate", "RUNNING", "Opening: " & srcPath)
     Set srcWb = Workbooks.Open(srcPath, ReadOnly:=True)
-    Dim srcWs As Worksheet
     Set srcWs = srcWb.Sheets(1)
 
     Dim errMsg As String
     errMsg = RunChecks(srcWs, yyyymm)
     If errMsg <> "" Then
-        Call WriteLog(yyyymm, "Step 1/7 - Validate", "ERROR", "Checks failed: " & errMsg)
+        Call WriteLog(yyyymm, "Step 1/7 - Validate", "ERROR", errMsg)
         srcWb.Close False
-        MsgBox "Data checks failed:" & vbNewLine & errMsg, vbCritical, "Validation Failed"
-        GoTo Cleanup
+        Application.DisplayAlerts = True
+        MsgBox "Data validation failed:" & vbNewLine & errMsg, vbCritical
+        Exit Sub
     End If
-    Call WriteLog(yyyymm, "Step 1/7 - Validate", "OK", "Source file validated. Columns OK, period data found.")
+    Call WriteLog(yyyymm, "Step 1/7 - Validate", "OK", "Validation passed. Period data found in source file.")
 
-    '── Step 2: Open QS SQL download ──────────────────────────────────────────
+    '── Step 2: Open QS SQL download ───────────────────────────────────────────
     Call WriteLog(yyyymm, "Step 2/7 - Open QS File", "RUNNING", "Opening: " & QS_FILE)
-    Dim qsWb As Workbook
     Set qsWb = Workbooks.Open(QS_FILE)
-    Dim qsWs As Worksheet
     Set qsWs = qsWb.Sheets(QS_DATA_TAB)
-    Call WriteLog(yyyymm, "Step 2/7 - Open QS File", "OK", "QS SQL download.xlsx opened successfully.")
+    Call WriteLog(yyyymm, "Step 2/7 - Open QS File", "OK", "QS SQL download.xlsx opened.")
 
-    '── Step 3: Delete existing rows ──────────────────────────────────────────
-    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "RUNNING", "Removing existing rows for period " & yyyymm)
-    Dim deletedCount As Long
-    deletedCount = DeleteExistingRows(qsWs, yyyymm)
-    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "OK", deletedCount & " existing rows removed.")
+    '── Step 3: Delete existing rows for this period ───────────────────────────
+    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "RUNNING", "Removing existing rows for " & yyyymm & "...")
+    Dim delCount As Long
+    delCount = DeleteExistingRows(qsWs, yyyymm)
+    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "OK", delCount & " rows removed.")
 
-    '── Step 4: Copy filtered rows ────────────────────────────────────────────
-    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "RUNNING", "Copying filtered rows from source file...")
-    Dim copiedCount As Long
-    copiedCount = CopyFilteredRows(srcWs, qsWs, yyyymm)
+    '── Step 4: Copy filtered rows from source ─────────────────────────────────
+    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "RUNNING", "Copying rows where column AA = " & yyyymm & "...")
+    Dim copyCount As Long
+    copyCount = CopyFilteredRows(srcWs, qsWs, yyyymm)
     srcWb.Close False
-    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "OK", copiedCount & " rows copied into QS data tab.")
+    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "OK", copyCount & " rows pasted into QS data tab.")
 
-    '── Step 5: Write formulas ────────────────────────────────────────────────
+    '── Step 5: Write AE/AF formulas ───────────────────────────────────────────
     Dim lookupCol As String
     lookupCol = GetLookupCol(yyyymm)
-    Call WriteLog(yyyymm, "Step 5/7 - Write Formulas", "RUNNING", "Writing AE/AF formulas. Lookup column: " & lookupCol)
-    Call WriteFormulas(qsWs, yyyymm)
-    Call WriteLog(yyyymm, "Step 5/7 - Write Formulas", "OK", "Formulas written for " & copiedCount & " rows.")
+    Call WriteLog(yyyymm, "Step 5/7 - Formulas", "RUNNING", "Writing AE/AF formulas. Lookup col = " & lookupCol)
+    Call WriteFormulas(qsWs, yyyymm, lookupCol)
+    Call WriteLog(yyyymm, "Step 5/7 - Formulas", "OK", "AE/AF formulas written for " & copyCount & " rows.")
 
-    '── Step 6: Refresh pivots ────────────────────────────────────────────────
-    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Refreshing all pivots in Caselist Pivots tab...")
+    '── Step 6: Refresh all pivots ─────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Refreshing all pivots (waiting 6s)...")
     qsWb.RefreshAll
     Application.Wait Now + TimeValue("00:00:06")
-    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "OK", "All pivots refreshed successfully.")
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "OK", "Pivots refreshed.")
 
-    '── Step 7: Copy pivots to output ─────────────────────────────────────────
+    '── Step 7: Create output file ─────────────────────────────────────────────
     Dim outPath As String
     outPath = OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & _
               " Caselist - EOP Asset Balance and Total Income by Country.xlsx"
-    Call WriteLog(yyyymm, "Step 7/7 - Output File", "RUNNING", "Creating output file: " & outPath)
+    Call WriteLog(yyyymm, "Step 7/7 - Output File", "RUNNING", "Creating: " & outPath)
 
     Dim niiData() As Variant
     Dim feeData()  As Variant
@@ -247,51 +252,58 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
 
     qsWb.Save
     qsWb.Close
-    Call WriteLog(yyyymm, "Step 7/7 - Output File", "OK", "Output file saved. QS SQL download.xlsx saved and closed.")
+    Call WriteLog(yyyymm, "Step 7/7 - Output File", "OK", "Output file saved. QS file saved and closed.")
 
-    '── MoM analysis ──────────────────────────────────────────────────────────
-    Call WriteLog(yyyymm, "MoM Analysis", "RUNNING", "Calculating NII and Fee MoM contributors...")
+    '── MoM analysis ───────────────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "MoM Analysis", "RUNNING", "Calculating NII and Fee contributors...")
     Dim niiText As String, feeText As String
     niiText = GetMomContributors(niiData, "NII", yyyymm)
     feeText = GetMomContributors(feeData, "Fee", yyyymm)
-    Call WriteLog(yyyymm, "MoM Analysis", "OK", "MoM analysis complete.")
     Call WriteLog(yyyymm, "MoM - NII", "INFO", niiText)
     Call WriteLog(yyyymm, "MoM - Fee", "INFO", feeText)
+    Call WriteLog(yyyymm, "MoM Analysis", "OK", "MoM analysis complete.")
 
-    '── Email draft ───────────────────────────────────────────────────────────
-    Call WriteLog(yyyymm, "Email", "RUNNING", "Preparing draft email for review...")
+    '── Draft email ────────────────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Email", "RUNNING", "Opening draft email in Outlook...")
     Call SendEmail(outPath, yyyymm, niiText, feeText)
-    Call WriteLog(yyyymm, "Email", "OK", "Draft email opened in Outlook. Please review and send manually.")
+    Call WriteLog(yyyymm, "Email", "OK", "Draft email opened. Please review and send manually.")
 
-    '── Done ──────────────────────────────────────────────────────────────────
+    '── Done ───────────────────────────────────────────────────────────────────
     Call WriteLog(yyyymm, "Pipeline", "OK", "ALL STEPS COMPLETE for " & MonthLabel(yyyymm) & " ✓")
 
     Application.DisplayAlerts = True
-    MsgBox "Done! Pipeline complete for " & MonthLabel(yyyymm) & "." & vbNewLine & vbNewLine & _
-           "Output: " & outPath & vbNewLine & _
+    MsgBox "Pipeline complete for " & MonthLabel(yyyymm) & "!" & vbNewLine & vbNewLine & _
+           "Output saved to:" & vbNewLine & outPath & vbNewLine & vbNewLine & _
            "Draft email is open in Outlook — please review and send.", _
            vbInformation, "PF Automation Complete"
     Exit Sub
 
 PipelineError:
-    Call WriteLog(yyyymm, "PIPELINE ERROR", "ERROR", "Error " & Err.Number & ": " & Err.Description)
+    Dim errNum As Long
+    Dim errDesc As String
+    errNum  = Err.Number
+    errDesc = Err.Description
+    On Error Resume Next
+    If Not srcWb Is Nothing Then srcWb.Close False
+    If Not qsWb Is Nothing Then qsWb.Close False
+    On Error GoTo 0
+    Call WriteLog(yyyymm, "PIPELINE ERROR", "ERROR", "Error " & errNum & ": " & errDesc)
     Application.DisplayAlerts = True
-    MsgBox "Pipeline error:" & vbNewLine & vbNewLine & _
-           "Error " & Err.Number & ": " & Err.Description & vbNewLine & vbNewLine & _
+    MsgBox "Pipeline failed!" & vbNewLine & vbNewLine & _
+           "Error " & errNum & ": " & errDesc & vbNewLine & vbNewLine & _
            "Check the Log sheet for details.", vbCritical, "Pipeline Error"
-
-Cleanup:
-    Application.DisplayAlerts = True
 End Sub
 
-'─── DATA CHECKS ──────────────────────────────────────────────────────────────
+'─── DATA CHECKS ───────────────────────────────────────────────────────────────
 
 Private Function RunChecks(ws As Worksheet, yyyymm As Long) As String
     Dim errors As String
     errors = ""
 
-    If ws.UsedRange.Columns.Count < 30 Then
-        errors = errors & "- Source file has fewer than 30 columns." & vbNewLine
+    If ws.UsedRange.Columns.Count < 27 Then
+        errors = errors & "- Source file has fewer than 27 columns (need at least column AA)." & vbNewLine
+        RunChecks = errors
+        Exit Function
     End If
 
     Dim lastRow As Long
@@ -301,8 +313,10 @@ Private Function RunChecks(ws As Worksheet, yyyymm As Long) As String
     found = False
     Dim i As Long
     For i = 2 To lastRow
-        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
-            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+        Dim cellVal As Variant
+        cellVal = ws.Cells(i, COL_AA).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then
                 found = True
                 Exit For
             End If
@@ -310,24 +324,26 @@ Private Function RunChecks(ws As Worksheet, yyyymm As Long) As String
     Next i
 
     If Not found Then
-        errors = errors & "- No rows where column AA = " & yyyymm & " found in source file." & vbNewLine
+        errors = errors & "- No rows found where column AA = " & yyyymm & "." & vbNewLine
     End If
 
     RunChecks = errors
 End Function
 
-'─── DELETE EXISTING ROWS ─────────────────────────────────────────────────────
+'─── DELETE EXISTING ROWS ──────────────────────────────────────────────────────
 
 Private Function DeleteExistingRows(ws As Worksheet, yyyymm As Long) As Long
     Dim lastRow As Long
     lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+
     Dim count As Long
     count = 0
-
     Dim i As Long
     For i = lastRow To 2 Step -1
-        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
-            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+        Dim cellVal As Variant
+        cellVal = ws.Cells(i, COL_AA).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then
                 ws.Rows(i).Delete
                 count = count + 1
             End If
@@ -336,7 +352,7 @@ Private Function DeleteExistingRows(ws As Worksheet, yyyymm As Long) As Long
     DeleteExistingRows = count
 End Function
 
-'─── COPY FILTERED ROWS ───────────────────────────────────────────────────────
+'─── COPY FILTERED ROWS ────────────────────────────────────────────────────────
 
 Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long) As Long
     Dim srcLastRow As Long
@@ -349,8 +365,10 @@ Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm 
     count = 0
     Dim i As Long
     For i = 2 To srcLastRow
-        If IsNumeric(srcWs.Cells(i, COL_AA).Value) Then
-            If CLng(srcWs.Cells(i, COL_AA).Value) = yyyymm Then
+        Dim cellVal As Variant
+        cellVal = srcWs.Cells(i, COL_AA).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then
                 srcWs.Range(srcWs.Cells(i, 1), srcWs.Cells(i, 30)).Copy
                 qsWs.Cells(destRow, 1).PasteSpecial xlPasteValues
                 destRow = destRow + 1
@@ -362,20 +380,21 @@ Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm 
     CopyFilteredRows = count
 End Function
 
-'─── WRITE AE / AF FORMULAS ───────────────────────────────────────────────────
+'─── WRITE AE / AF FORMULAS ────────────────────────────────────────────────────
 
-Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long)
+Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long, lookupCol As String)
     Dim lastRow As Long
     lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
 
-    Dim lookupCol As String
-    lookupCol = GetLookupCol(yyyymm)
-
     Dim i As Long
     For i = 2 To lastRow
-        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
-            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+        Dim cellVal As Variant
+        cellVal = ws.Cells(i, COL_AA).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then
+                ' AE = F & E & N
                 ws.Cells(i, COL_AE).Formula = "=F" & i & "&E" & i & "&N" & i
+                ' AF = card check + dynamic vlookup
                 ws.Cells(i, COL_AF).Formula = _
                     "=IF(ISNUMBER(SEARCH(""card"",Q" & i & ")),""Card""," & _
                     "IFERROR(VLOOKUP(AE" & i & ",'" & CHECK_DUP_TAB & "'!" & _
@@ -385,7 +404,7 @@ Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long)
     Next i
 End Sub
 
-'─── COPY PIVOTS TO OUTPUT ────────────────────────────────────────────────────
+'─── COPY PIVOTS TO OUTPUT FILE ────────────────────────────────────────────────
 
 Private Sub CopyPivotsToOutput(qsWb As Workbook, outPath As String, _
                                 niiData() As Variant, feeData() As Variant)
@@ -430,13 +449,14 @@ Private Sub CopyPivotsToOutput(qsWb As Workbook, outPath As String, _
     outWb.Close
 End Sub
 
-'─── MOM ANALYSIS ─────────────────────────────────────────────────────────────
+'─── MOM ANALYSIS ──────────────────────────────────────────────────────────────
 
 Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm As Long) As String
     On Error GoTo ErrHandler
 
     If Not IsArray(pvData) Then
-        GetMomContributors = label & ": no data available.": Exit Function
+        GetMomContributors = label & ": no data available."
+        Exit Function
     End If
 
     Dim prevMm As Long
@@ -444,7 +464,6 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
 
     Dim currCol As Long, prevCol As Long
     currCol = 0: prevCol = 0
-
     Dim c As Long
     For c = 1 To UBound(pvData, 2)
         If IsNumeric(pvData(1, c)) Then
@@ -454,12 +473,13 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
     Next c
 
     If currCol = 0 Or prevCol = 0 Then
-        GetMomContributors = label & ": could not locate month columns.": Exit Function
+        GetMomContributors = label & ": could not find columns for " & yyyymm & " or " & prevMm
+        Exit Function
     End If
 
-    Dim names() As String
-    Dim moves() As Double
-    Dim count   As Long
+    Dim names()  As String
+    Dim moves()  As Double
+    Dim count    As Long
     count = 0
 
     Dim r As Long
@@ -487,9 +507,11 @@ NextRow:
     Next r
 
     If count = 0 Then
-        GetMomContributors = label & ": no MoM movement detected.": Exit Function
+        GetMomContributors = label & ": no MoM movement detected."
+        Exit Function
     End If
 
+    ' Sort descending by absolute value
     Dim j As Long
     Dim tempN As String, tempM As Double
     For r = 1 To count - 1
@@ -509,34 +531,30 @@ NextRow:
         absTotal  = absTotal  + Abs(moves(r))
     Next r
 
-    Dim direction As String
-    direction = IIf(totalMove >= 0, "up", "down")
-
-    Dim lines As String
-    lines = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
-            Format(Abs(totalMove), "#,##0") & " " & direction & vbNewLine & _
-            "Key contributors (>=80% of movement):" & vbNewLine
+    Dim result As String
+    result = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
+             Format(Abs(totalMove), "#,##0") & IIf(totalMove >= 0, " up", " down") & vbNewLine & _
+             "Key contributors (>=80% of movement):" & vbNewLine
 
     Dim cumulative As Double
     cumulative = 0
     For r = 1 To count
         Dim pct As Double
         pct = IIf(totalMove <> 0, moves(r) / totalMove * 100, 0)
-        Dim arrow As String
-        arrow = IIf(moves(r) >= 0, Chr(9650), Chr(9660))
-        lines = lines & "  " & arrow & " " & names(r) & ": " & _
-                Format(moves(r), "+#,##0;-#,##0") & " (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
+        result = result & "  " & IIf(moves(r) >= 0, Chr(9650), Chr(9660)) & " " & _
+                 names(r) & ": " & Format(moves(r), "+#,##0;-#,##0") & _
+                 " (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
         cumulative = cumulative + Abs(moves(r))
         If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
     Next r
 
-    GetMomContributors = lines
+    GetMomContributors = result
     Exit Function
 ErrHandler:
-    GetMomContributors = label & ": error - " & Err.Description
+    GetMomContributors = label & ": error in MoM analysis - " & Err.Description
 End Function
 
-'─── SEND EMAIL ───────────────────────────────────────────────────────────────
+'─── SEND EMAIL ────────────────────────────────────────────────────────────────
 
 Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, feeText As String)
     Dim olApp  As Object
@@ -564,7 +582,7 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
     End With
 End Sub
 
-'─── HELPERS ──────────────────────────────────────────────────────────────────
+'─── HELPERS ───────────────────────────────────────────────────────────────────
 
 Private Function GetLookupCol(yyyymm As Long) As String
     Dim diff   As Long
@@ -581,9 +599,13 @@ End Function
 
 Private Function PrevYYYYMM(yyyymm As Long) As Long
     Dim yr As Long, mo As Long
-    yr = yyyymm \ 100: mo = yyyymm Mod 100
-    If mo = 1 Then PrevYYYYMM = (yr - 1) * 100 + 12 _
-    Else PrevYYYYMM = yr * 100 + (mo - 1)
+    yr = yyyymm \ 100
+    mo = yyyymm Mod 100
+    If mo = 1 Then
+        PrevYYYYMM = (yr - 1) * 100 + 12
+    Else
+        PrevYYYYMM = yr * 100 + (mo - 1)
+    End If
 End Function
 
 Private Function MonthLabel(yyyymm As Long) As String
