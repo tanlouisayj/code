@@ -92,9 +92,7 @@ Private Sub InitLog(yyyymm As Long)
     ws.Activate
     Application.ScreenUpdating = True
     DoEvents
-End Sub
-
-Private Sub WriteLog(yyyymm As Long, stepName As String, status As String, msg As String)
+End Sub(yyyymm As Long, stepName As String, status As String, msg As String)
     Dim ws As Worksheet
     Set ws = GetLogSheet()
 
@@ -114,7 +112,6 @@ Private Sub WriteLog(yyyymm As Long, stepName As String, status As String, msg A
         Case "INFO":    ws.Cells(nextRow, 4).Interior.Color = RGB(180, 220, 255)
     End Select
 
-    Application.Goto ws.Cells(nextRow, 1)
     Application.ScreenUpdating = True
     DoEvents
 End Sub
