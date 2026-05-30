@@ -402,7 +402,7 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     Call WriteLog(yyyymm, "MoM Analysis", "RUNNING", "Scanning for YYYYMM header row...")
     Dim niiText As String, feeText As String
     niiText = GetMomContributors(niiData, "NII", yyyymm)
-    feeText = GetMomContributors(feeData, "Fee", yyyymm)
+    feeText = GetFeeBalanceContributors(feeData, yyyymm)
     Call WriteLog(yyyymm, "MoM - NII", "INFO", niiText)
     Call WriteLog(yyyymm, "MoM - Fee", "INFO", feeText)
     Call WriteLog(yyyymm, "MoM Analysis", "OK", "Done.")
@@ -754,51 +754,35 @@ NextRow:
         totalMove = totalMove + moves(r)
     Next r
 
-    ' Split into same-direction and opposite-direction arrays
+    ' Keep only same-direction contributors
     Dim sameN() As String, sameM() As Double, sameCnt As Long: sameCnt = 0
-    Dim oppN()  As String, oppM()  As Double, oppCnt  As Long: oppCnt  = 0
-
     For r = 1 To count
         If (totalMove >= 0 And moves(r) > 0) Or (totalMove < 0 And moves(r) < 0) Then
             sameCnt = sameCnt + 1
             ReDim Preserve sameN(1 To sameCnt): ReDim Preserve sameM(1 To sameCnt)
             sameN(sameCnt) = names(r): sameM(sameCnt) = moves(r)
-        Else
-            oppCnt = oppCnt + 1
-            ReDim Preserve oppN(1 To oppCnt): ReDim Preserve oppM(1 To oppCnt)
-            oppN(oppCnt) = names(r): oppM(oppCnt) = moves(r)
         End If
     Next r
 
-    ' Sort each group by absolute value descending
-    Dim j As Long, tn As String, tm As Double
-    If sameCnt > 1 Then
-        For r = 1 To sameCnt - 1
-            For j = 1 To sameCnt - r
-                If Abs(sameM(j)) < Abs(sameM(j+1)) Then
-                    tn = sameN(j): tm = sameM(j)
-                    sameN(j) = sameN(j+1): sameM(j) = sameM(j+1)
-                    sameN(j+1) = tn: sameM(j+1) = tm
-                End If
-            Next j
-        Next r
-    End If
-    If oppCnt > 1 Then
-        For r = 1 To oppCnt - 1
-            For j = 1 To oppCnt - r
-                If Abs(oppM(j)) < Abs(oppM(j+1)) Then
-                    tn = oppN(j): tm = oppM(j)
-                    oppN(j) = oppN(j+1): oppM(j) = oppM(j+1)
-                    oppN(j+1) = tn: oppM(j+1) = tm
-                End If
-            Next j
-        Next r
+    If sameCnt = 0 Then
+        GetMomContributors = label & ": no same-direction contributors found.": Exit Function
     End If
 
-    ' absTotal = sum of ALL absolute movements (basis for % and 80% threshold)
+    ' Sort by absolute value descending
+    Dim j As Long, tn As String, tm As Double
+    For r = 1 To sameCnt - 1
+        For j = 1 To sameCnt - r
+            If Abs(sameM(j)) < Abs(sameM(j+1)) Then
+                tn = sameN(j): tm = sameM(j)
+                sameN(j) = sameN(j+1): sameM(j) = sameM(j+1)
+                sameN(j+1) = tn: sameM(j+1) = tm
+            End If
+        Next j
+    Next r
+
     Dim absTotal As Double: absTotal = 0
-    For r = 1 To count
-        absTotal = absTotal + Abs(moves(r))
+    For r = 1 To sameCnt
+        absTotal = absTotal + Abs(sameM(r))
     Next r
 
     Dim dirLabel As String
@@ -807,11 +791,11 @@ NextRow:
     Dim result As String
     result = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
              Format(totalMove, "+#,##0;-#,##0") & vbNewLine & _
-             "Key contributors to " & dirLabel & " (>=80%):" & vbNewLine
+             "Key contributors to " & dirLabel & ":" & vbNewLine
 
-    ' Accumulate same-direction first
     Dim cumulative As Double: cumulative = 0
     Dim pct As Double
+    Dim lineCount As Long: lineCount = 0
 
     For r = 1 To sameCnt
         pct = IIf(absTotal > 0, Abs(sameM(r)) / absTotal * 100, 0)
@@ -819,28 +803,138 @@ NextRow:
                  Format(sameM(r), "+#,##0;-#,##0") & _
                  " (" & Format(pct, "0.0") & "%)" & vbNewLine
         cumulative = cumulative + Abs(sameM(r))
-        If absTotal > 0 And cumulative / absTotal >= 0.8 Then GoTo DoneMoM
+        lineCount = lineCount + 1
+        ' Stop at 80% OR 10 contributors, whichever comes first
+        If lineCount >= 10 Then Exit For
+        If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
     Next r
-
-    ' If 80% not yet reached, add opposite-direction contributors with "(offsetting)" label
-    If oppCnt > 0 Then
-        result = result & "  Offsetting contributors:" & vbNewLine
-        For r = 1 To oppCnt
-            pct = IIf(absTotal > 0, Abs(oppM(r)) / absTotal * 100, 0)
-            result = result & "  - " & oppN(r) & ": " & _
-                     Format(oppM(r), "+#,##0;-#,##0") & _
-                     " (" & Format(pct, "0.0") & "%)" & vbNewLine
-            cumulative = cumulative + Abs(oppM(r))
-            If absTotal > 0 And cumulative / absTotal >= 0.8 Then GoTo DoneMoM
-        Next r
-    End If
-
-DoneMoM:
 
     GetMomContributors = result
     Exit Function
 ErrHandler:
     GetMomContributors = label & ": error - " & Err.Description
+End Function
+
+'─── FEE BALANCE CONTRIBUTORS (top contributors to current month balance) ──────
+
+Private Function GetFeeBalanceContributors(pvData() As Variant, yyyymm As Long) As String
+    On Error GoTo ErrHandler
+    If Not IsArray(pvData) Then
+        GetFeeBalanceContributors = "Fee: no data available.": Exit Function
+    End If
+
+    Dim prevMm As Long: prevMm = PrevYYYYMM(yyyymm)
+
+    ' Find header row and current/previous month columns
+    Dim headerRow As Long: headerRow = 0
+    Dim r As Long, c As Long
+    For r = 1 To UBound(pvData,1)
+        For c = 1 To UBound(pvData,2)
+            If IsNumeric(pvData(r,c)) Then
+                Dim tv As Long: tv = CLng(pvData(r,c))
+                If tv >= 200001 And tv <= 209912 Then
+                    Dim tmo As Long: tmo = tv Mod 100
+                    If tmo >= 1 And tmo <= 12 Then
+                        headerRow = r: Exit For
+                    End If
+                End If
+            End If
+        Next c
+        If headerRow > 0 Then Exit For
+    Next r
+
+    If headerRow = 0 Then
+        GetFeeBalanceContributors = "Fee: could not find YYYYMM header row.": Exit Function
+    End If
+
+    Dim currCol As Long, prevCol As Long
+    currCol = 0: prevCol = 0
+    For c = 1 To UBound(pvData,2)
+        If IsNumeric(pvData(headerRow,c)) Then
+            If CLng(pvData(headerRow,c)) = yyyymm Then currCol = c
+            If CLng(pvData(headerRow,c)) = prevMm  Then prevCol = c
+        End If
+    Next c
+
+    If currCol = 0 Then
+        GetFeeBalanceContributors = "Fee: could not find column for " & yyyymm: Exit Function
+    End If
+
+    ' Calculate MoM for the header line
+    Dim feeTotal As Double, feePrev As Double
+    feeTotal = 0: feePrev = 0
+
+    ' Collect current month balances by customer (column B), skip totals
+    Dim bNames() As String, bVals() As Double, bCnt As Long: bCnt = 0
+    For r = headerRow + 1 To UBound(pvData,1)
+        Dim rowLbl As String: rowLbl = ""
+        If Not IsEmpty(pvData(r,1)) Then rowLbl = Trim(CStr(pvData(r,1)))
+        If rowLbl = "" Then GoTo NextFee
+        If InStr(1, LCase(rowLbl), "total") > 0 Then GoTo NextFee
+        Dim custN As String: custN = ""
+        If Not IsEmpty(pvData(r,2)) Then custN = Trim(CStr(pvData(r,2)))
+        If custN = "" Then custN = rowLbl
+        Dim bal As Double: bal = 0
+        If IsNumeric(pvData(r, currCol)) Then bal = CDbl(pvData(r, currCol))
+        Dim prevBal As Double: prevBal = 0
+        If prevCol > 0 Then
+            If IsNumeric(pvData(r, prevCol)) Then prevBal = CDbl(pvData(r, prevCol))
+        End If
+        feeTotal = feeTotal + bal
+        feePrev  = feePrev  + prevBal
+        If Abs(bal) > 0 Then
+            bCnt = bCnt + 1
+            ReDim Preserve bNames(1 To bCnt): ReDim Preserve bVals(1 To bCnt)
+            bNames(bCnt) = custN: bVals(bCnt) = bal
+        End If
+NextFee:
+    Next r
+
+    If bCnt = 0 Then
+        GetFeeBalanceContributors = "Fee: no balance data found.": Exit Function
+    End If
+
+    ' Sort by absolute balance descending
+    Dim j As Long, tn As String, tm As Double
+    For r = 1 To bCnt - 1
+        For j = 1 To bCnt - r
+            If Abs(bVals(j)) < Abs(bVals(j+1)) Then
+                tn = bNames(j): tm = bVals(j)
+                bNames(j) = bNames(j+1): bVals(j) = bVals(j+1)
+                bNames(j+1) = tn: bVals(j+1) = tm
+            End If
+        Next j
+    Next r
+
+    Dim feeMoM As Double: feeMoM = feeTotal - feePrev
+    Dim result As String
+    result = "Fee MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
+             Format(feeMoM, "+#,##0;-#,##0") & vbNewLine & _
+             "Top contributors to " & MonthLabel(yyyymm) & " Fee balance:" & vbNewLine
+
+    Dim cumulative As Double: cumulative = 0
+    Dim absBalTotal As Double: absBalTotal = 0
+    For r = 1 To bCnt
+        absBalTotal = absBalTotal + Abs(bVals(r))
+    Next r
+
+    Dim lineCount As Long: lineCount = 0
+    For r = 1 To bCnt
+        Dim pct As Double
+        pct = IIf(absBalTotal > 0, Abs(bVals(r)) / absBalTotal * 100, 0)
+        result = result & "  - " & bNames(r) & ": " & _
+                 Format(bVals(r), "#,##0;-#,##0") & _
+                 " (" & Format(pct, "0.0") & "%)" & vbNewLine
+        cumulative = cumulative + Abs(bVals(r))
+        lineCount = lineCount + 1
+        If lineCount >= 10 Then Exit For
+        If absBalTotal > 0 And cumulative / absBalTotal >= 0.8 Then Exit For
+    Next r
+
+    GetFeeBalanceContributors = result
+    Exit Function
+ErrHandler:
+    GetFeeBalanceContributors = "Fee: error - " & Err.Description
 End Function
 
 '─── SEND EMAIL ────────────────────────────────────────────────────────────────
