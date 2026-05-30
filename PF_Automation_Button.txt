@@ -462,7 +462,7 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
                    " Caselist - EOP Asset Balance and Total Income by Country"
         .Body    = body
         .Attachments.Add attachPath
-        .Send
+        .Display   ' Opens as draft for you to review before sending
     End With
 End Sub
 
