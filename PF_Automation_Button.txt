@@ -281,27 +281,65 @@ Public Sub RunPipelineManual()
         ThisWorkbook.Sheets(SETTINGS_SHEET).Activate: Exit Sub
     End If
 
-    Dim periodInput As String
-    periodInput = InputBox("Enter the period to process:", "PF Automation", DefaultPeriod())
-    If periodInput = "" Then MsgBox "Cancelled.", vbInformation: Exit Sub
+    ' Auto-detect YYYYMM.xlsx files in the watch folder
+    Dim fso As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim folder As Object
+    On Error Resume Next
+    Set folder = fso.GetFolder(WATCH_FOLDER())
+    On Error GoTo 0
 
-    If Not IsNumeric(periodInput) Or Len(Trim(periodInput)) <> 6 Then
-        MsgBox "Invalid period. Enter exactly 6 digits e.g. 202604.", vbCritical: Exit Sub
+    If folder Is Nothing Then
+        MsgBox "Cannot access watch folder:" & vbNewLine & WATCH_FOLDER(), vbCritical: Exit Sub
+    End If
+
+    ' Find all YYYYMM.xlsx files
+    Dim foundFiles() As String
+    Dim foundCount As Long: foundCount = 0
+    Dim file As Object
+    For Each file In folder.Files
+        Dim fname As String: fname = file.Name
+        If LCase(Right(fname, 5)) = ".xlsx" And Len(fname) = 11 Then
+            Dim period As String: period = Left(fname, 6)
+            If IsNumeric(period) Then
+                Dim mo As Long: mo = CLng(period) Mod 100
+                If mo >= 1 And mo <= 12 Then
+                    foundCount = foundCount + 1
+                    ReDim Preserve foundFiles(1 To foundCount)
+                    foundFiles(foundCount) = period
+                End If
+            End If
+        End If
+    Next file
+
+    ' Determine which period to process
+    Dim periodInput As String
+    If foundCount = 0 Then
+        MsgBox "No YYYYMM.xlsx file found in:" & vbNewLine & WATCH_FOLDER() & vbNewLine & vbNewLine & _
+               "Please drop a file named e.g. 202605.xlsx into the folder first.", vbCritical
+        Exit Sub
+    ElseIf foundCount = 1 Then
+        periodInput = foundFiles(1)
+        If MsgBox("Found: " & periodInput & ".xlsx" & vbNewLine & vbNewLine & _
+                  "Process period " & MonthLabel(CLng(periodInput)) & " (" & periodInput & ")?", _
+                  vbYesNo + vbQuestion, "PF Automation") = vbNo Then Exit Sub
+    Else
+        ' Multiple files found — let user pick
+        Dim fileList As String: fileList = ""
+        Dim i As Long
+        For i = 1 To foundCount
+            fileList = fileList & foundFiles(i) & vbNewLine
+        Next i
+        periodInput = InputBox("Multiple files found in the folder:" & vbNewLine & vbNewLine & _
+                               fileList & vbNewLine & "Enter the period to process:", _
+                               "Multiple Files Found", foundFiles(foundCount))
+        If periodInput = "" Then MsgBox "Cancelled.", vbInformation: Exit Sub
     End If
 
     Dim yyyymm As Long: yyyymm = CLng(periodInput)
-    Dim mo As Long:     mo = yyyymm Mod 100
-    If mo < 1 Or mo > 12 Then
-        MsgBox "Invalid month in " & yyyymm & ". Must be 01-12.", vbCritical: Exit Sub
-    End If
-
     Dim srcPath As String: srcPath = WATCH_FOLDER() & periodInput & ".xlsx"
-    If Dir(srcPath) = "" Then
-        MsgBox "File not found:" & vbNewLine & srcPath & vbNewLine & vbNewLine & _
-               "Drop " & periodInput & ".xlsx into:" & vbNewLine & WATCH_FOLDER(), vbCritical
-        Exit Sub
-    End If
 
+    ' Block if QS file already open
     Dim wb As Workbook
     For Each wb In Workbooks
         If InStr(1, LCase(wb.FullName), LCase("QS SQL download")) > 0 Then
