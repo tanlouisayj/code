@@ -701,12 +701,15 @@ Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm
         Exit Function
     End If
 
-    ' Collect movements from rows below the header
+    ' Collect movements — skip any row where column A contains "total"
+    ' Use customer name from column A (first non-empty col in data rows)
     Dim names() As String, moves() As Double, count As Long: count = 0
     For r = headerRow + 1 To UBound(pvData,1)
         Dim rowLabel As String: rowLabel = ""
         If Not IsEmpty(pvData(r,1)) Then rowLabel = Trim(CStr(pvData(r,1)))
-        If rowLabel = "" Or LCase(rowLabel) = "grand total" Then GoTo NextRow
+        ' Skip blank rows and any row containing "total" (subtotals, grand total etc)
+        If rowLabel = "" Then GoTo NextRow
+        If InStr(1, LCase(rowLabel), "total") > 0 Then GoTo NextRow
         Dim currVal As Double, prevVal As Double
         currVal = 0: prevVal = 0
         If IsNumeric(pvData(r, currCol)) Then currVal = CDbl(pvData(r, currCol))
@@ -745,15 +748,15 @@ NextRow:
 
     Dim result As String
     result = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
-             Format(Abs(totalMove), "#,##0") & IIf(totalMove >= 0, " up", " down") & vbNewLine & _
-             "Key contributors (>=80%):" & vbNewLine
+             Format(totalMove, "+#,##0;-#,##0") & vbNewLine & _
+             "Key contributors (>=80% of movement):" & vbNewLine
 
     Dim cumulative As Double: cumulative = 0
     For r = 1 To count
         Dim pct As Double
         pct = IIf(totalMove <> 0, moves(r) / totalMove * 100, 0)
-        result = result & "  " & IIf(moves(r) >= 0, "UP", "DN") & " " & _
-                 names(r) & ": " & Format(moves(r), "+#,##0;-#,##0") & _
+        result = result & "  - " & names(r) & ": " & _
+                 Format(moves(r), "+#,##0;-#,##0") & _
                  " (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
         cumulative = cumulative + Abs(moves(r))
         If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
