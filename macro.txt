@@ -1,0 +1,552 @@
+'=============================================================================
+' PF CASELIST AUTOMATION - VBA VERSION
+' Save this in a macro-enabled workbook (.xlsm) called PF_Automation.xlsm
+' Keep the workbook open in the background — it watches the folder every 60s
+'=============================================================================
+' HOW TO SET UP:
+'   1. Open Excel, create new workbook, Save As > PF_Automation.xlsm
+'   2. Press Alt+F11 to open VBA Editor
+'   3. In left panel, double-click "ThisWorkbook"
+'   4. Paste the Workbook_Open sub at the bottom of this file there
+'   5. Insert > Module, paste everything else into that module
+'   6. Close VBA Editor, save, reopen file — automation starts automatically
+'=============================================================================
+
+Option Explicit
+
+'─── CONFIGURATION ────────────────────────────────────────────────────────────
+Const WATCH_FOLDER  As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
+Const QS_FILE       As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\QS SQL download.xlsx"
+Const OUTPUT_FOLDER As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
+
+Const EMAIL_TO      As String = "stevelim@dbs.com"
+Const EMAIL_CC      As String = "kaiyuanwong@dbs.com; ganeshp@dbs.com"
+Const EMAIL_NAME    As String = "Louisa"
+
+' Column mapping: 202601 = col Q (17), 202602 = R (18), etc.
+Const BASE_MONTH    As Long = 202601
+Const BASE_COL_IDX  As Long = 17        ' Q = 17
+
+' Column positions in QS data (1-indexed)
+Const COL_AA As Long = 27
+Const COL_AE As Long = 31
+Const COL_AF As Long = 32
+Const COL_Q  As Long = 17
+Const COL_F  As Long = 6
+Const COL_E  As Long = 5
+Const COL_N  As Long = 14
+
+Const QS_DATA_TAB   As String = "QS data"
+Const CHECK_DUP_TAB As String = "Check duplicate EGs"
+Const PIVOT_TAB     As String = "Caselist Pivots"
+
+' Pivot start cells and their output tab names
+' Format: "StartCell|TabName"
+Const PIVOT_1 As String = "A1|EOP Asset Balance"
+Const PIVOT_2 As String = "S1|Total Income"
+Const PIVOT_3 As String = "AP1|NII"
+Const PIVOT_4 As String = "BH1|Fee"
+Const PIVOT_5 As String = "BZ1|Other income"
+
+'─── FOLDER WATCHER ───────────────────────────────────────────────────────────
+' Called every 60 seconds by the timer set in Workbook_Open
+
+Public Sub WatchFolder()
+    Dim fso     As Object
+    Dim folder  As Object
+    Dim file    As Object
+    Dim fname   As String
+    Dim yyyymm  As Long
+
+    Set fso    = CreateObject("Scripting.FileSystemObject")
+    Set folder = fso.GetFolder(WATCH_FOLDER)
+
+    For Each file In folder.Files
+        fname = file.Name
+        ' Match files named exactly YYYYMM.xlsx
+        If LCase(Right(fname, 5)) = ".xlsx" And Len(fname) = 11 Then
+            Dim period As String
+            period = Left(fname, 6)
+            If IsNumeric(period) Then
+                yyyymm = CLng(period)
+                ' Check it looks like a valid YYYYMM (year 2020+, month 1-12)
+                If yyyymm \ 100 >= 2020 And (yyyymm Mod 100) >= 1 And (yyyymm Mod 100) <= 12 Then
+                    ' Check not already processed (rename to .done when done)
+                    Call RunPipeline(file.Path, yyyymm)
+                    ' Rename to .done so we don't re-process
+                    Name file.Path As WATCH_FOLDER & period & ".done"
+                End If
+            End If
+        End If
+    Next file
+
+    ' Re-arm the timer
+    Application.OnTime Now + TimeValue("00:01:00"), "WatchFolder"
+End Sub
+
+'─── MAIN PIPELINE ────────────────────────────────────────────────────────────
+
+Public Sub RunPipeline(srcPath As String, yyyymm As Long)
+    Dim qsWb    As Workbook
+    Dim qsWs    As Worksheet
+    Dim srcWb   As Workbook
+    Dim srcWs   As Worksheet
+
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts  = False
+
+    ' Step 1: Open source file and run checks
+    Set srcWb = Workbooks.Open(srcPath, ReadOnly:=True)
+    Set srcWs = srcWb.Sheets(1)
+
+    Dim errMsg As String
+    errMsg = RunChecks(srcWs, yyyymm)
+    If errMsg <> "" Then
+        MsgBox "Data checks failed for " & yyyymm & ":" & vbNewLine & errMsg, vbCritical
+        srcWb.Close False
+        Application.ScreenUpdating = True
+        Application.DisplayAlerts  = True
+        Exit Sub
+    End If
+
+    ' Step 2: Open QS SQL download.xlsx
+    Set qsWb = Workbooks.Open(QS_FILE)
+    Set qsWs = qsWb.Sheets(QS_DATA_TAB)
+
+    ' Step 3: Delete existing rows for this YYYYMM
+    Call DeleteExistingRows(qsWs, yyyymm)
+
+    ' Step 4: Copy filtered rows from source (cols A-AD only)
+    Call CopyFilteredRows(srcWs, qsWs, yyyymm)
+    srcWb.Close False
+
+    ' Step 5: Write AE/AF formulas
+    Call WriteFormulas(qsWs, yyyymm)
+
+    ' Step 6: Refresh all pivots
+    qsWb.RefreshAll
+    Application.Wait Now + TimeValue("00:00:05")  ' Wait 5s for refresh
+
+    ' Step 7: Copy pivots to output file
+    Dim outPath As String
+    outPath = OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & _
+              " Caselist - EOP Asset Balance and Total Income by Country.xlsx"
+
+    Dim niiData() As Variant
+    Dim feeData()  As Variant
+    Call CopyPivotsToOutput(qsWb, outPath, niiData, feeData)
+
+    ' Step 8: Save QS file
+    qsWb.Save
+    qsWb.Close
+
+    ' Step 9: MoM analysis
+    Dim niiText As String
+    Dim feeText As String
+    niiText = GetMomContributors(niiData, "NII", yyyymm)
+    feeText = GetMomContributors(feeData, "Fee", yyyymm)
+
+    ' Step 10: Send email
+    Call SendEmail(outPath, yyyymm, niiText, feeText)
+
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts  = True
+
+    MsgBox "Pipeline complete for " & yyyymm & "!" & vbNewLine & "Email sent to " & EMAIL_TO, vbInformation
+End Sub
+
+'─── DATA CHECKS ──────────────────────────────────────────────────────────────
+
+Private Function RunChecks(ws As Worksheet, yyyymm As Long) As String
+    Dim errors As String
+    errors = ""
+
+    ' Check minimum 30 columns
+    If ws.UsedRange.Columns.Count < 30 Then
+        errors = errors & "- Source file has fewer than 30 columns." & vbNewLine
+    End If
+
+    ' Check YYYYMM exists in column AA
+    Dim found As Boolean
+    found = False
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+
+    Dim i As Long
+    For i = 2 To lastRow
+        If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+            found = True
+            Exit For
+        End If
+    Next i
+
+    If Not found Then
+        errors = errors & "- No rows found where column AA = " & yyyymm & "." & vbNewLine
+    End If
+
+    RunChecks = errors
+End Function
+
+'─── DELETE EXISTING ROWS ─────────────────────────────────────────────────────
+
+Private Sub DeleteExistingRows(ws As Worksheet, yyyymm As Long)
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+
+    Dim i As Long
+    For i = lastRow To 2 Step -1
+        Dim cellVal As Variant
+        cellVal = ws.Cells(i, COL_AA).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then
+                ws.Rows(i).Delete
+            End If
+        End If
+    Next i
+End Sub
+
+'─── COPY FILTERED ROWS ───────────────────────────────────────────────────────
+
+Private Sub CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long)
+    Dim srcLastRow As Long
+    srcLastRow = srcWs.Cells(srcWs.Rows.Count, COL_AA).End(xlUp).Row
+
+    Dim qsLastRow As Long
+    qsLastRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row
+
+    Dim destRow As Long
+    destRow = qsLastRow + 1
+
+    Dim i As Long
+    For i = 2 To srcLastRow
+        If IsNumeric(srcWs.Cells(i, COL_AA).Value) Then
+            If CLng(srcWs.Cells(i, COL_AA).Value) = yyyymm Then
+                ' Copy only cols A-AD (1-30), paste as values
+                srcWs.Range(srcWs.Cells(i, 1), srcWs.Cells(i, 30)).Copy
+                qsWs.Cells(destRow, 1).PasteSpecial xlPasteValues
+                destRow = destRow + 1
+            End If
+        End If
+    Next i
+    Application.CutCopyMode = False
+End Sub
+
+'─── WRITE AE / AF FORMULAS ───────────────────────────────────────────────────
+
+Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long)
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Find first row for this YYYYMM
+    Dim startRow As Long
+    startRow = 0
+    Dim i As Long
+    For i = 2 To lastRow
+        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
+            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+                startRow = i
+                Exit For
+            End If
+        End If
+    Next i
+
+    If startRow = 0 Then Exit Sub
+
+    ' Find last row for this YYYYMM
+    Dim endRow As Long
+    endRow = startRow
+    For i = startRow + 1 To lastRow
+        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
+            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
+                endRow = i
+            End If
+        End If
+    Next i
+
+    ' Get lookup column letter for this month
+    Dim lookupCol As String
+    lookupCol = GetLookupCol(yyyymm)
+
+    For i = startRow To endRow
+        ' AE: concatenate F, E, N
+        ws.Cells(i, COL_AE).Formula = "=F" & i & "&E" & i & "&N" & i
+
+        ' AF: if col Q contains "card" return "Card", else dynamic vlookup
+        ws.Cells(i, COL_AF).Formula = _
+            "=IF(ISNUMBER(SEARCH(""card"",Q" & i & ")),""Card""," & _
+            "IFERROR(VLOOKUP(AE" & i & ",'" & CHECK_DUP_TAB & "'!" & _
+            lookupCol & ":" & lookupCol & ",1,0),""*No""))"
+    Next i
+End Sub
+
+'─── COPY PIVOTS TO OUTPUT FILE ───────────────────────────────────────────────
+
+Private Sub CopyPivotsToOutput(qsWb As Workbook, outPath As String, _
+                                niiData() As Variant, feeData() As Variant)
+    Dim pivotWs As Worksheet
+    Set pivotWs = qsWb.Sheets(PIVOT_TAB)
+
+    ' Create new workbook
+    Dim outWb As Workbook
+    Set outWb = Workbooks.Add
+
+    ' Remove extra sheets (keep only 1)
+    Do While outWb.Sheets.Count > 1
+        outWb.Sheets(outWb.Sheets.Count).Delete
+    Loop
+
+    Dim pivots(1 To 5) As String
+    pivots(1) = PIVOT_1
+    pivots(2) = PIVOT_2
+    pivots(3) = PIVOT_3
+    pivots(4) = PIVOT_4
+    pivots(5) = PIVOT_5
+
+    Dim idx As Long
+    For idx = 1 To 5
+        Dim parts() As String
+        parts = Split(pivots(idx), "|")
+        Dim startCell As String
+        Dim tabName   As String
+        startCell = parts(0)
+        tabName   = parts(1)
+
+        ' Get pivot range by expanding from start cell
+        Dim pvRange As Range
+        Set pvRange = pivotWs.Range(startCell).CurrentRegion
+
+        ' Get values
+        Dim pvData() As Variant
+        pvData = pvRange.Value
+
+        ' Store NII (idx=3) and Fee (idx=4) for MoM
+        If idx = 3 Then niiData = pvData
+        If idx = 4 Then feeData = pvData
+
+        ' Write to output workbook
+        Dim outWs As Worksheet
+        If idx = 1 Then
+            Set outWs = outWb.Sheets(1)
+            outWs.Name = tabName
+        Else
+            Set outWs = outWb.Sheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
+            outWs.Name = tabName
+        End If
+
+        outWs.Range("A1").Resize(UBound(pvData, 1), UBound(pvData, 2)).Value = pvData
+    Next idx
+
+    outWb.SaveAs outPath, xlOpenXMLWorkbook
+    outWb.Close
+End Sub
+
+'─── MOM ANALYSIS ─────────────────────────────────────────────────────────────
+
+Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm As Long) As String
+    On Error GoTo ErrHandler
+
+    If Not IsArray(pvData) Then
+        GetMomContributors = label & ": no data available."
+        Exit Function
+    End If
+
+    Dim prevMm As Long
+    prevMm = PrevYYYYMM(yyyymm)
+
+    ' Find column indices for current and previous month
+    Dim currCol As Long, prevCol As Long
+    currCol = 0: prevCol = 0
+
+    Dim c As Long
+    For c = 1 To UBound(pvData, 2)
+        If IsNumeric(pvData(1, c)) Then
+            If CLng(pvData(1, c)) = yyyymm Then currCol = c
+            If CLng(pvData(1, c)) = prevMm  Then prevCol = c
+        End If
+    Next c
+
+    If currCol = 0 Or prevCol = 0 Then
+        GetMomContributors = label & ": could not locate month columns for MoM."
+        Exit Function
+    End If
+
+    ' Collect movements
+    Dim names()  As String
+    Dim moves()  As Double
+    Dim count    As Long
+    count = 0
+
+    Dim r As Long
+    For r = 2 To UBound(pvData, 1)
+        Dim rowLabel As String
+        rowLabel = ""
+        If Not IsEmpty(pvData(r, 1)) Then rowLabel = CStr(pvData(r, 1))
+
+        If rowLabel <> "" And LCase(rowLabel) <> "grand total" Then
+            Dim currVal As Double, prevVal As Double
+            currVal = 0: prevVal = 0
+            If IsNumeric(pvData(r, currCol)) Then currVal = CDbl(pvData(r, currCol))
+            If IsNumeric(pvData(r, prevCol)) Then prevVal = CDbl(pvData(r, prevCol))
+            Dim movement As Double
+            movement = currVal - prevVal
+            If movement <> 0 Then
+                count = count + 1
+                ReDim Preserve names(1 To count)
+                ReDim Preserve moves(1 To count)
+                names(count) = rowLabel
+                moves(count) = movement
+            End If
+        End If
+    Next r
+
+    If count = 0 Then
+        GetMomContributors = label & ": no MoM movement detected."
+        Exit Function
+    End If
+
+    ' Sort by absolute movement descending (bubble sort)
+    Dim j As Long
+    Dim tempN As String, tempM As Double
+    For r = 1 To count - 1
+        For j = 1 To count - r
+            If Abs(moves(j)) < Abs(moves(j + 1)) Then
+                tempN = names(j): tempM = moves(j)
+                names(j) = names(j + 1): moves(j) = moves(j + 1)
+                names(j + 1) = tempN: moves(j + 1) = tempM
+            End If
+        Next j
+    Next r
+
+    ' Total movement
+    Dim totalMove As Double
+    totalMove = 0
+    For r = 1 To count
+        totalMove = totalMove + moves(r)
+    Next r
+
+    Dim absTotal As Double
+    absTotal = 0
+    For r = 1 To count
+        absTotal = absTotal + Abs(moves(r))
+    Next r
+
+    ' Accumulate contributors until >=80%
+    Dim lines As String
+    Dim cumulative As Double
+    cumulative = 0
+
+    Dim direction As String
+    direction = IIf(totalMove >= 0, "up", "down")
+
+    lines = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
+            Format(Abs(totalMove), "#,##0") & " " & direction & vbNewLine & _
+            "Key contributors (>=80% of movement):" & vbNewLine
+
+    For r = 1 To count
+        Dim pct As Double
+        pct = IIf(totalMove <> 0, moves(r) / totalMove * 100, 0)
+        Dim arrow As String
+        arrow = IIf(moves(r) >= 0, Chr(9650), Chr(9660))  ' ▲ or ▼
+        lines = lines & "  " & arrow & " " & names(r) & ": " & _
+                Format(moves(r), "+#,##0;-#,##0") & "  (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
+        cumulative = cumulative + Abs(moves(r))
+        If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
+    Next r
+
+    GetMomContributors = lines
+    Exit Function
+ErrHandler:
+    GetMomContributors = label & ": error in MoM analysis - " & Err.Description
+End Function
+
+'─── SEND EMAIL VIA OUTLOOK ───────────────────────────────────────────────────
+
+Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, feeText As String)
+    Dim olApp  As Object
+    Dim olMail As Object
+
+    Set olApp  = CreateObject("Outlook.Application")
+    Set olMail = olApp.CreateItem(0)
+
+    Dim period As String
+    period = MonthLabel(yyyymm)
+
+    Dim body As String
+    body = "Hi Steve," & vbNewLine & vbNewLine & _
+           "Please find attached the updated PF Caselist - EOP Asset Balance and Total Income by Country." & _
+           vbNewLine & vbNewLine & _
+           niiText & vbNewLine & _
+           feeText & vbNewLine & _
+           "Best regards," & vbNewLine & EMAIL_NAME
+
+    With olMail
+        .To      = EMAIL_TO
+        .CC      = EMAIL_CC
+        .Subject = "PF " & period & " Caselist - EOP Asset Balance and Total Income by Country"
+        .Body    = body
+        .Attachments.Add attachPath
+        .Send
+    End With
+
+    Set olMail = Nothing
+    Set olApp  = Nothing
+End Sub
+
+'─── HELPERS ──────────────────────────────────────────────────────────────────
+
+Private Function GetLookupCol(yyyymm As Long) As String
+    Dim baseYr  As Long, baseMo As Long
+    Dim currYr  As Long, currMo As Long
+    Dim diff    As Long, colIdx As Long
+
+    baseYr = BASE_MONTH \ 100
+    baseMo = BASE_MONTH Mod 100
+    currYr = yyyymm \ 100
+    currMo = yyyymm Mod 100
+
+    diff   = (currYr - baseYr) * 12 + (currMo - baseMo)
+    colIdx = BASE_COL_IDX + diff
+
+    ' Convert column index to letter(s)
+    Dim colLtr As String
+    If colIdx <= 26 Then
+        colLtr = Chr(64 + colIdx)
+    Else
+        colLtr = Chr(64 + (colIdx - 1) \ 26) & Chr(65 + (colIdx - 1) Mod 26)
+    End If
+    GetLookupCol = colLtr
+End Function
+
+Private Function PrevYYYYMM(yyyymm As Long) As Long
+    Dim yr As Long, mo As Long
+    yr = yyyymm \ 100
+    mo = yyyymm Mod 100
+    If mo = 1 Then
+        PrevYYYYMM = (yr - 1) * 100 + 12
+    Else
+        PrevYYYYMM = yr * 100 + (mo - 1)
+    End If
+End Function
+
+Private Function MonthLabel(yyyymm As Long) As String
+    Dim yr As Long, mo As Long
+    yr = yyyymm \ 100
+    mo = yyyymm Mod 100
+    Dim mNames(1 To 12) As String
+    mNames(1)  = "Jan": mNames(2)  = "Feb": mNames(3)  = "Mar"
+    mNames(4)  = "Apr": mNames(5)  = "May": mNames(6)  = "Jun"
+    mNames(7)  = "Jul": mNames(8)  = "Aug": mNames(9)  = "Sep"
+    mNames(10) = "Oct": mNames(11) = "Nov": mNames(12) = "Dec"
+    MonthLabel = mNames(mo) & " " & Right(CStr(yr), 2)
+End Function
+
+'=============================================================================
+' PASTE THIS PART INTO "ThisWorkbook" in the VBA Editor
+'=============================================================================
+'
+' Private Sub Workbook_Open()
+'     ' Start watching the folder 60 seconds after file opens
+'     Application.OnTime Now + TimeValue("00:00:10"), "WatchFolder"
+' End Sub
+'
+'=============================================================================
