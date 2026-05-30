@@ -424,8 +424,12 @@ PipelineError:
     Dim en As Long: en = Err.Number
     Dim ed As String: ed = Err.Description
     On Error Resume Next
-    If Not srcWb Is Nothing Then srcWb.Close False
-    If Not qsWb  Is Nothing Then qsWb.Close False
+    If Not srcWb Is Nothing Then
+        If srcWb.Name <> "" Then srcWb.Close False
+    End If
+    If Not qsWb Is Nothing Then
+        If qsWb.Name <> "" Then qsWb.Close False
+    End If
     On Error GoTo 0
     Application.CutCopyMode = False
     Call WriteLog(yyyymm, "PIPELINE ERROR", "ERROR", "Error " & en & ": " & ed)
@@ -940,6 +944,7 @@ End Function
 '─── SEND EMAIL ────────────────────────────────────────────────────────────────
 
 Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, feeText As String)
+    On Error GoTo EmailError
     Dim olApp As Object, olMail As Object
     Set olApp  = CreateObject("Outlook.Application")
     Set olMail = olApp.CreateItem(0)
@@ -949,6 +954,8 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
            "EOP Asset Balance and Total Income by Country." & _
            vbNewLine & vbNewLine & _
            niiText & vbNewLine & feeText & vbNewLine & _
+           "Please let me know if you have any questions or require further information." & _
+           vbNewLine & vbNewLine & _
            "Best regards," & vbNewLine & EMAIL_NAME()
     With olMail
         .To      = EMAIL_TO()
@@ -959,6 +966,11 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
         .Attachments.Add attachPath
         .Display
     End With
+    Exit Sub
+EmailError:
+    MsgBox "Email draft could not be opened automatically." & vbNewLine & vbNewLine & _
+           "Please open Outlook and send manually." & vbNewLine & _
+           "Output file is at: " & attachPath, vbExclamation, "Email Warning"
 End Sub
 
 '─── TRAFIGURA EDGE CASE ───────────────────────────────────────────────────────
