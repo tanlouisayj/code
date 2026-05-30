@@ -538,21 +538,18 @@ Private Function DeleteExistingRows(ws As Worksheet, yyyymm As Long) As Long
     DeleteExistingRows = count
 End Function
 
-'─── BULK COPY — ALL COLUMNS, AA/N/S PRESERVED AS TEXT ────────────────────────
+'─── BULK COPY — COLUMNS A-AD AND AG, AA/N/S PRESERVED AS TEXT ─────────────────
 
 Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long) As Long
+    Const COL_AG As Long = 33  ' AG = column 33
+
     Dim srcLastRow As Long
     srcLastRow = srcWs.Cells(srcWs.Rows.Count, COL_AA).End(xlUp).Row
     If srcLastRow < 2 Then: CopyFilteredRows = 0: Exit Function
 
-    ' Detect total columns in source dynamically
-    Dim srcLastCol As Long
-    srcLastCol = srcWs.Cells(1, srcWs.Columns.Count).End(xlToLeft).Column
-    If srcLastCol < COL_AA Then srcLastCol = COL_AA  ' at minimum need col AA
-
-    ' Read all source data into memory at once
+    ' Read columns A-AG (1-33) from source into memory at once
     Dim srcData() As Variant
-    srcData = srcWs.Range(srcWs.Cells(2, 1), srcWs.Cells(srcLastRow, srcLastCol)).Value
+    srcData = srcWs.Range(srcWs.Cells(2, 1), srcWs.Cells(srcLastRow, COL_AG)).Value
 
     ' Count matching rows
     Dim count As Long: count = 0
@@ -564,35 +561,46 @@ Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm 
     Next i
     If count = 0 Then: CopyFilteredRows = 0: Exit Function
 
-    ' Build filtered array — preserve AA, N, S as text strings
-    Dim outData() As Variant
-    ReDim outData(1 To count, 1 To srcLastCol)
+    ' Build filtered array — copy A-AD (cols 1-30) and AG (col 33)
+    ' Skip AE (31) and AF (32) — those are written by WriteFormulas
+    Dim outAD() As Variant   ' columns A-AD
+    Dim outAG() As Variant   ' column AG only
+    ReDim outAD(1 To count, 1 To 30)
+    ReDim outAG(1 To count, 1 To 1)
+
     Dim destIdx As Long: destIdx = 0
     Dim j As Long
     For i = 1 To UBound(srcData, 1)
         If IsNumeric(srcData(i, COL_AA)) Then
             If CLng(srcData(i, COL_AA)) = yyyymm Then
                 destIdx = destIdx + 1
-                For j = 1 To srcLastCol
+                For j = 1 To 30
                     If j = COL_AA Or j = COL_N Or j = COL_S Then
-                        outData(destIdx, j) = CStr(srcData(i, j))
+                        outAD(destIdx, j) = CStr(srcData(i, j))  ' preserve as text
                     Else
-                        outData(destIdx, j) = srcData(i, j)
+                        outAD(destIdx, j) = srcData(i, j)
                     End If
                 Next j
+                outAG(destIdx, 1) = srcData(i, COL_AG)
             End If
         End If
     Next i
 
-    ' Pre-format AA, N, S as text before writing
+    ' Find destination row
     Dim destRow As Long
     destRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row + 1
+
+    ' Pre-format AA, N, S as text
     qsWs.Cells(destRow, COL_AA).Resize(count, 1).NumberFormat = "@"
     qsWs.Cells(destRow, COL_N).Resize(count, 1).NumberFormat  = "@"
     qsWs.Cells(destRow, COL_S).Resize(count, 1).NumberFormat  = "@"
 
-    ' Write all rows in one shot — all columns from source
-    qsWs.Cells(destRow, 1).Resize(count, srcLastCol).Value = outData
+    ' Write A-AD in one shot
+    qsWs.Cells(destRow, 1).Resize(count, 30).Value = outAD
+
+    ' Write AG in one shot
+    qsWs.Cells(destRow, COL_AG).Resize(count, 1).Value = outAG
+
     CopyFilteredRows = count
 End Function
 
