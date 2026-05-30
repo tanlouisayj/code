@@ -417,12 +417,35 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     Call WriteFormulas(qsWs, yyyymm, lookupCol)
     Call WriteLog(yyyymm, "Step 5/7 - Formulas", "OK", "Done.")
 
-    ' Step 6: Refresh pivots
-    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Refreshing (8s wait)...")
+    ' Step 6: Refresh pivots — two-pass to ensure correct calculation order
+    ' Pass 1: Force calculate AF formulas, then refresh Check duplicate EGs pivot
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Pass 1: Calculating formulas...")
     Application.ScreenUpdating = False
-    qsWb.RefreshAll
+    Application.Calculate          ' Force AE/AF formulas to evaluate first
+    Application.Wait Now + TimeValue("00:00:02")
+
+    ' Refresh Check duplicate EGs pivot specifically first
+    Dim checkWs As Worksheet
+    On Error Resume Next
+    Set checkWs = qsWb.Sheets(CHECK_DUP_TAB)
+    On Error GoTo 0
+    If Not checkWs Is Nothing Then
+        Dim pt As PivotTable
+        For Each pt In checkWs.PivotTables
+            pt.RefreshTable
+        Next pt
+    End If
+    Application.Wait Now + TimeValue("00:00:02")
+
+    ' Pass 2: Recalculate AF VLOOKUP against refreshed Check duplicate EGs,
+    '         then refresh all remaining pivots (including Caselist Pivots)
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Pass 2: Recalculating and refreshing Caselist Pivots...")
+    Application.Calculate          ' AF column now picks up refreshed Check duplicate EGs
+    Application.Wait Now + TimeValue("00:00:02")
+    qsWb.RefreshAll                ' Refresh all remaining pivots with correct data
     Application.Wait Now + TimeValue("00:00:08")
-    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "OK", "Refreshed.")
+    Application.Calculate          ' Final calculate pass
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "OK", "Two-pass refresh complete.")
 
     ' Step 7: Output
     Dim outPath As String
