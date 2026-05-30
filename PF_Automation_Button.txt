@@ -70,11 +70,11 @@ End Function
 
 Private Function BuildCC() As String
     Dim cc As String: cc = ""
-    Dim cells As Variant
-    cells = Array(SET_EMAIL_CC1, SET_EMAIL_CC2, SET_EMAIL_CC3, SET_EMAIL_CC4)
+    Dim ccList As Variant
+    ccList = Array(SET_EMAIL_CC1, SET_EMAIL_CC2, SET_EMAIL_CC3, SET_EMAIL_CC4)
     Dim i As Long
-    For i = 0 To UBound(cells)
-        Dim v As String: v = GetSetting(cells(i))
+    For i = 0 To UBound(ccList)
+        Dim v As String: v = GetSetting(ccList(i))
         If v <> "" Then
             If cc <> "" Then cc = cc & "; "
             cc = cc & v
