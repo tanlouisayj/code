@@ -28,6 +28,13 @@ Const SET_EMAIL_NAME     As String = "B12"
 Const SET_BASE_MONTH     As String = "B15"
 Const SET_BASE_COL       As String = "B16"
 
+' Trafigura edge case input cells (fill in before running; leave blank to skip)
+Const SET_TRAF_V  As String = "B28"  ' MTD NII amt (SGD)
+Const SET_TRAF_W  As String = "B29"  ' MTD NII on Assets (SGD)
+Const SET_TRAF_AB As String = "B30"  ' MTD Total Income (SGD)
+Const SET_TRAF_AC As String = "B31"  ' EOP Asset Balance (SGD)
+Const SET_TRAF_AD As String = "B32"  ' PRODUCT Avg Asset Balance (SGD)
+
 Const COL_AA As Long = 27  ' YYYYMM — preserved as text
 Const COL_AE As Long = 31
 Const COL_AF As Long = 32
@@ -165,6 +172,27 @@ Public Sub SetupControlPanel()
     ws.Range("A24").Value = "TIP: Update yellow cells when paths change (e.g. new 2027 folder). No VBA editing needed."
     ws.Range("A24").Font.Color = RGB(0, 128, 0)
     ws.Range("A24").Font.Italic = True
+
+    '── TRAFIGURA EDGE CASE ──
+    Call AddSH(ws, "A26", "TRAFIGURA PTE LTD EDGE CASE")
+    ws.Range("A27").Value = "Fill in the 5 values below before running. Leave ALL blank to skip."
+    ws.Range("A27").Font.Color = RGB(100, 100, 100)
+    ws.Range("A27").Font.Italic = True
+
+    Call AddLbl(ws, "A28", "V  — MTD NII amt (SGD)")
+    Call AddLbl(ws, "A29", "W  — MTD NII on Assets (SGD)")
+    Call AddLbl(ws, "A30", "AB — MTD Total Income (SGD)")
+    Call AddLbl(ws, "A31", "AC — EOP Asset Balance (SGD)")
+    Call AddLbl(ws, "A32", "AD — PRODUCT Avg Asset Balance (SGD)")
+
+    ws.Range("B28:B32").ClearContents
+    ws.Range("B28:B32").Interior.Color = RGB(255, 255, 180)
+    ws.Range("B28:B32").NumberFormat = "#,##0.000"
+
+    ws.Range("A33:G33").Merge
+    ws.Range("A33").Value = "NOTE: After the macro runs, clear these cells so they are not re-used next month accidentally."
+    ws.Range("A33").Font.Color = RGB(192, 0, 0)
+    ws.Range("A33").Font.Italic = True
     ws.Activate
     MsgBox "Control panel ready! Fill yellow cells then click Run PF Pipeline.", vbInformation, "Setup Complete"
 End Sub
@@ -844,10 +872,23 @@ End Sub
 Private Sub HandleTrafiguraEdgeCase(qsWs As Worksheet, yyyymm As Long)
     Const TRAF_COL As Long = 3  ' Column C
 
-    ' Find most recent existing Trafigura row (not from current period)
+    ' Check if any Sheet1 Trafigura values are filled in
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets(SETTINGS_SHEET)
+    Dim vVal  As String: vVal  = Trim(CStr(ws.Range(SET_TRAF_V).Value))
+    Dim wVal  As String: wVal  = Trim(CStr(ws.Range(SET_TRAF_W).Value))
+    Dim abVal As String: abVal = Trim(CStr(ws.Range(SET_TRAF_AB).Value))
+    Dim acVal As String: acVal = Trim(CStr(ws.Range(SET_TRAF_AC).Value))
+    Dim adVal As String: adVal = Trim(CStr(ws.Range(SET_TRAF_AD).Value))
+
+    ' If ALL blank, skip entirely
+    If vVal = "" And wVal = "" And abVal = "" And acVal = "" And adVal = "" Then
+        Exit Sub
+    End If
+
+    ' Find most recent existing Trafigura row (not current period) to copy from
     Dim lastRow As Long: lastRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row
-    Dim trafRow As Long:   trafRow = 0
-    Dim trafMM  As Long:   trafMM  = 0
+    Dim trafRow As Long: trafRow = 0
+    Dim trafMM  As Long: trafMM  = 0
     Dim i As Long
 
     For i = 2 To lastRow
@@ -863,17 +904,12 @@ Private Sub HandleTrafiguraEdgeCase(qsWs As Worksheet, yyyymm As Long)
     Next i
 
     If trafRow = 0 Then
-        MsgBox "No existing TRAFIGURA PTE LTD row found to copy from. Skipping.", vbInformation, "Trafigura Edge Case"
+        MsgBox "Trafigura values found on Sheet1 but no existing Trafigura row found to copy from. Skipping.", _
+               vbExclamation, "Trafigura Edge Case"
         Exit Sub
     End If
 
-    ' Ask user
-    If MsgBox("TRAFIGURA PTE LTD edge case detected." & vbNewLine & vbNewLine & _
-              "A row will be copied from period " & trafMM & " and added for " & yyyymm & "." & vbNewLine & _
-              "You will then be prompted to enter 5 values." & vbNewLine & vbNewLine & _
-              "Proceed?", vbYesNo + vbQuestion, "Trafigura Edge Case") = vbNo Then Exit Sub
-
-    ' Copy row to new row at bottom
+    ' Copy row as template
     Dim newRow As Long: newRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row + 1
     qsWs.Rows(trafRow).Copy
     qsWs.Cells(newRow, 1).PasteSpecial xlPasteValues
@@ -883,43 +919,30 @@ Private Sub HandleTrafiguraEdgeCase(qsWs As Worksheet, yyyymm As Long)
     qsWs.Cells(newRow, COL_AA).NumberFormat = "@"
     qsWs.Cells(newRow, COL_AA).Value = CStr(yyyymm)
 
-    ' Prompt user for 5 editable values
-    Dim colLabels(1 To 5) As String
-    Dim colNums(1 To 5)   As Long
-    colLabels(1) = "V  — MTD NII amt (SGD)"
-    colLabels(2) = "W  — MTD NII on Assets (SGD)"
-    colLabels(3) = "AB — MTD Total Income (SGD)"
-    colLabels(4) = "AC — EOP Asset Balance (SGD)"
-    colLabels(5) = "AD — PRODUCT Avg Asset Balance (SGD)"
-    colNums(1)   = 22   ' V
-    colNums(2)   = 23   ' W
-    colNums(3)   = 28   ' AB
-    colNums(4)   = 29   ' AC
-    colNums(5)   = 30   ' AD
+    ' Write values from Sheet1 (only overwrite if cell is not blank)
+    Dim colNums(1 To 5) As Long
+    Dim colVals(1 To 5) As String
+    colNums(1) = 22: colVals(1) = vVal   ' V
+    colNums(2) = 23: colVals(2) = wVal   ' W
+    colNums(3) = 28: colVals(3) = abVal  ' AB
+    colNums(4) = 29: colVals(4) = acVal  ' AC
+    colNums(5) = 30: colVals(5) = adVal  ' AD
 
     Dim k As Long
     For k = 1 To 5
-        Dim copiedVal As String
-        copiedVal = CStr(qsWs.Cells(newRow, colNums(k)).Value)
-
-        Dim userVal As String
-        userVal = InputBox("TRAFIGURA PTE LTD  —  Period: " & yyyymm & vbNewLine & vbNewLine & _
-                           "Column " & colLabels(k) & vbNewLine & _
-                           "Copied value: " & copiedVal & vbNewLine & vbNewLine & _
-                           "Enter new value (or leave as is and click OK to keep copied value):", _
-                           "Trafigura — " & colLabels(k), copiedVal)
-
-        ' If user clicked Cancel, keep copied value. If entered something, update.
-        If StrPtr(userVal) <> 0 Then   ' 0 = user clicked Cancel
-            If IsNumeric(userVal) Then
-                qsWs.Cells(newRow, colNums(k)).Value = CDbl(userVal)
+        If colVals(k) <> "" Then
+            If IsNumeric(colVals(k)) Then
+                qsWs.Cells(newRow, colNums(k)).Value = CDbl(colVals(k))
             Else
-                qsWs.Cells(newRow, colNums(k)).Value = userVal
+                qsWs.Cells(newRow, colNums(k)).Value = colVals(k)
             End If
         End If
     Next k
 
-    MsgBox "Trafigura row added for " & yyyymm & ". Pipeline will continue.", vbInformation, "Trafigura Done"
+    ' Remind user to clear the cells
+    MsgBox "Trafigura row added for " & yyyymm & " using Sheet1 values." & vbNewLine & vbNewLine & _
+           "Remember to clear the Trafigura cells on Sheet1 after this run.", _
+           vbInformation, "Trafigura Done"
 End Sub
 
 '─── HELPERS ───────────────────────────────────────────────────────────────────
