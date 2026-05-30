@@ -1,5 +1,5 @@
 '=============================================================================
-' PF CASELIST AUTOMATION - MANUAL TRIGGER VERSION
+' PF CASELIST AUTOMATION - MANUAL TRIGGER VERSION WITH LIVE LOG
 '=============================================================================
 ' HOW TO SET UP:
 '   1. Open Excel, Save As > PF_Automation.xlsm (macro-enabled workbook)
@@ -9,21 +9,22 @@
 '   5. On Sheet1, go to Insert > Shapes, draw a rectangle button
 '   6. Right-click the shape > Assign Macro > select "RunPipelineManual"
 '   7. Label the button "Run PF Pipeline"
+'   8. A "Log" sheet will be created automatically on first run
 '
 ' HOW TO USE EACH MONTH:
 '   1. Drop YYYYMM.xlsx into the Automation folder
 '   2. Open PF_Automation.xlsm
 '   3. Click "Run PF Pipeline" button
 '   4. Type the period (e.g. 202605) when prompted
-'   5. Sit back — it processes and sends the email automatically
+'   5. Watch the Log sheet update live as each step runs
 '=============================================================================
 
 Option Explicit
 
 '─── CONFIGURATION ────────────────────────────────────────────────────────────
 Const WATCH_FOLDER  As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
-Const QS_FILE       As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\QS SQL download.xlsx"
-Const OUTPUT_FOLDER As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
+Const QS_FILE       As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\QS SQL download.xlsx"
+Const OUTPUT_FOLDER As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\"
 
 Const EMAIL_TO   As String = "stevelim@dbs.com"
 Const EMAIL_CC   As String = "kaiyuanwong@dbs.com; ganeshp@dbs.com"
@@ -45,26 +46,104 @@ Const COL_N  As Long = 14
 Const QS_DATA_TAB   As String = "QS data"
 Const CHECK_DUP_TAB As String = "Check duplicate EGs"
 Const PIVOT_TAB     As String = "Caselist Pivots"
+Const LOG_SHEET     As String = "Log"
+
+'─── LOG HELPERS ──────────────────────────────────────────────────────────────
+
+Private Sub InitLog(yyyymm As Long)
+    Dim ws As Worksheet
+
+    ' Create Log sheet if it doesn't exist
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(LOG_SHEET)
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        ws.Name = LOG_SHEET
+    End If
+
+    ' Set up headers if sheet is empty
+    If ws.Cells(1, 1).Value = "" Then
+        ws.Cells(1, 1).Value = "Timestamp"
+        ws.Cells(1, 2).Value = "Period"
+        ws.Cells(1, 3).Value = "Step"
+        ws.Cells(1, 4).Value = "Status"
+        ws.Cells(1, 5).Value = "Message"
+        ws.Rows(1).Font.Bold = True
+        ws.Columns("A").ColumnWidth = 20
+        ws.Columns("B").ColumnWidth = 10
+        ws.Columns("C").ColumnWidth = 35
+        ws.Columns("D").ColumnWidth = 10
+        ws.Columns("E").ColumnWidth = 60
+    End If
+
+    ' Add separator row for new run
+    Dim nextRow As Long
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    ws.Cells(nextRow, 1).Value = "── NEW RUN ──"
+    ws.Cells(nextRow, 2).Value = yyyymm
+    ws.Cells(nextRow, 1).Font.Bold = True
+    ws.Cells(nextRow, 1).Interior.Color = RGB(200, 200, 200)
+    ws.Cells(nextRow, 2).Interior.Color = RGB(200, 200, 200)
+
+    ' Switch to log sheet so user can watch
+    ws.Activate
+    Application.ScreenUpdating = True
+End Sub
+
+Private Sub WriteLog(yyyymm As Long, stepName As String, status As String, msg As String)
+    Dim ws As Worksheet
+    On Error Resume Next
+    Set ws = ThisWorkbook.Sheets(LOG_SHEET)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    Dim nextRow As Long
+    nextRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+
+    ws.Cells(nextRow, 1).Value = Format(Now, "DD/MM/YYYY HH:MM:SS")
+    ws.Cells(nextRow, 2).Value = yyyymm
+    ws.Cells(nextRow, 3).Value = stepName
+    ws.Cells(nextRow, 4).Value = status
+    ws.Cells(nextRow, 5).Value = msg
+
+    ' Colour by status
+    Select Case UCase(status)
+        Case "RUNNING"
+            ws.Cells(nextRow, 4).Interior.Color = RGB(255, 255, 180)  ' Yellow
+        Case "OK"
+            ws.Cells(nextRow, 4).Interior.Color = RGB(180, 255, 180)  ' Green
+        Case "ERROR"
+            ws.Cells(nextRow, 4).Interior.Color = RGB(255, 180, 180)  ' Red
+        Case "INFO"
+            ws.Cells(nextRow, 4).Interior.Color = RGB(180, 220, 255)  ' Blue
+    End Select
+
+    ' Scroll to latest row
+    ws.Cells(nextRow, 1).Select
+    Application.ScreenUpdating = True
+    DoEvents
+End Sub
 
 '─── BUTTON ENTRY POINT ───────────────────────────────────────────────────────
 
 Public Sub RunPipelineManual()
-    ' Ask user for the period to process
-    Dim input As String
-    input = InputBox("Enter the period to process (e.g. 202605):", "PF Automation", Format(Now, "YYYYMM"))
+    Dim periodInput As String
+    periodInput = InputBox("Enter the period to process (e.g. 202605):", "PF Automation", Format(Now, "YYYYMM"))
 
-    If input = "" Then
+    If periodInput = "" Then
         MsgBox "Cancelled.", vbInformation
         Exit Sub
     End If
 
-    If Not IsNumeric(input) Or Len(input) <> 6 Then
+    If Not IsNumeric(periodInput) Or Len(periodInput) <> 6 Then
         MsgBox "Invalid period. Please enter 6 digits e.g. 202605.", vbCritical
         Exit Sub
     End If
 
     Dim yyyymm As Long
-    yyyymm = CLng(input)
+    yyyymm = CLng(periodInput)
 
     Dim mo As Long
     mo = yyyymm Mod 100
@@ -73,23 +152,21 @@ Public Sub RunPipelineManual()
         Exit Sub
     End If
 
-    ' Look for the source file in the watch folder
     Dim srcPath As String
-    srcPath = WATCH_FOLDER & input & ".xlsx"
+    srcPath = WATCH_FOLDER & periodInput & ".xlsx"
 
     If Dir(srcPath) = "" Then
         MsgBox "Source file not found:" & vbNewLine & srcPath & vbNewLine & vbNewLine & _
-               "Please drop " & input & ".xlsx into the Automation folder first.", vbCritical
+               "Please drop " & periodInput & ".xlsx into the Automation folder first.", vbCritical
         Exit Sub
     End If
 
-    ' Confirm before running
     Dim confirm As Integer
     confirm = MsgBox("Ready to process period " & yyyymm & "." & vbNewLine & vbNewLine & _
-                     "Source: " & srcPath & vbNewLine & _
-                     "Output: PF " & MonthLabel(yyyymm) & " Caselist..." & vbNewLine & vbNewLine & _
-                     "Email will be sent to " & EMAIL_TO & vbNewLine & _
-                     "CC: " & EMAIL_CC & vbNewLine & vbNewLine & _
+                     "Source:  " & srcPath & vbNewLine & _
+                     "QS File: " & QS_FILE & vbNewLine & _
+                     "Output:  " & OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & " Caselist..." & vbNewLine & vbNewLine & _
+                     "Draft email will open for review before sending." & vbNewLine & vbNewLine & _
                      "Proceed?", vbYesNo + vbQuestion, "PF Automation")
 
     If confirm = vbNo Then Exit Sub
@@ -100,17 +177,15 @@ End Sub
 '─── MAIN PIPELINE ────────────────────────────────────────────────────────────
 
 Private Sub RunPipeline(srcPath As String, yyyymm As Long)
-    Application.ScreenUpdating = False
-    Application.DisplayAlerts  = False
+    Application.DisplayAlerts = False
 
-    Dim statusMsg As String
-    statusMsg = "Starting pipeline for " & yyyymm & "..."
-    Application.StatusBar = statusMsg
+    Call InitLog(yyyymm)
+    Call WriteLog(yyyymm, "Pipeline", "INFO", "Starting pipeline for period " & yyyymm)
 
     On Error GoTo PipelineError
 
-    ' Step 1: Open source file and validate
-    Application.StatusBar = "Step 1/7: Validating source file..."
+    '── Step 1: Validate source file ──────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 1/7 - Validate", "RUNNING", "Opening source file: " & srcPath)
     Dim srcWb As Workbook
     Set srcWb = Workbooks.Open(srcPath, ReadOnly:=True)
     Dim srcWs As Worksheet
@@ -119,41 +194,52 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
     Dim errMsg As String
     errMsg = RunChecks(srcWs, yyyymm)
     If errMsg <> "" Then
+        Call WriteLog(yyyymm, "Step 1/7 - Validate", "ERROR", "Checks failed: " & errMsg)
         srcWb.Close False
         MsgBox "Data checks failed:" & vbNewLine & errMsg, vbCritical, "Validation Failed"
         GoTo Cleanup
     End If
+    Call WriteLog(yyyymm, "Step 1/7 - Validate", "OK", "Source file validated. Columns OK, period data found.")
 
-    ' Step 2: Open QS SQL download.xlsx
-    Application.StatusBar = "Step 2/7: Opening QS SQL download.xlsx..."
+    '── Step 2: Open QS SQL download ──────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 2/7 - Open QS File", "RUNNING", "Opening: " & QS_FILE)
     Dim qsWb As Workbook
     Set qsWb = Workbooks.Open(QS_FILE)
     Dim qsWs As Worksheet
     Set qsWs = qsWb.Sheets(QS_DATA_TAB)
+    Call WriteLog(yyyymm, "Step 2/7 - Open QS File", "OK", "QS SQL download.xlsx opened successfully.")
 
-    ' Step 3: Delete existing rows for this period
-    Application.StatusBar = "Step 3/7: Removing existing rows for " & yyyymm & "..."
-    Call DeleteExistingRows(qsWs, yyyymm)
+    '── Step 3: Delete existing rows ──────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "RUNNING", "Removing existing rows for period " & yyyymm)
+    Dim deletedCount As Long
+    deletedCount = DeleteExistingRows(qsWs, yyyymm)
+    Call WriteLog(yyyymm, "Step 3/7 - Delete Rows", "OK", deletedCount & " existing rows removed.")
 
-    ' Step 4: Copy filtered rows from source (cols A-AD only)
-    Application.StatusBar = "Step 4/7: Copying new data..."
-    Call CopyFilteredRows(srcWs, qsWs, yyyymm)
+    '── Step 4: Copy filtered rows ────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "RUNNING", "Copying filtered rows from source file...")
+    Dim copiedCount As Long
+    copiedCount = CopyFilteredRows(srcWs, qsWs, yyyymm)
     srcWb.Close False
+    Call WriteLog(yyyymm, "Step 4/7 - Copy Data", "OK", copiedCount & " rows copied into QS data tab.")
 
-    ' Step 5: Write AE/AF formulas
-    Application.StatusBar = "Step 5/7: Writing formulas..."
+    '── Step 5: Write formulas ────────────────────────────────────────────────
+    Dim lookupCol As String
+    lookupCol = GetLookupCol(yyyymm)
+    Call WriteLog(yyyymm, "Step 5/7 - Write Formulas", "RUNNING", "Writing AE/AF formulas. Lookup column: " & lookupCol)
     Call WriteFormulas(qsWs, yyyymm)
+    Call WriteLog(yyyymm, "Step 5/7 - Write Formulas", "OK", "Formulas written for " & copiedCount & " rows.")
 
-    ' Step 6: Refresh pivots
-    Application.StatusBar = "Step 6/7: Refreshing pivots (please wait)..."
+    '── Step 6: Refresh pivots ────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "RUNNING", "Refreshing all pivots in Caselist Pivots tab...")
     qsWb.RefreshAll
     Application.Wait Now + TimeValue("00:00:06")
+    Call WriteLog(yyyymm, "Step 6/7 - Refresh Pivots", "OK", "All pivots refreshed successfully.")
 
-    ' Step 7: Copy pivots to output file
-    Application.StatusBar = "Step 7/7: Creating output file and sending email..."
+    '── Step 7: Copy pivots to output ─────────────────────────────────────────
     Dim outPath As String
     outPath = OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & _
               " Caselist - EOP Asset Balance and Total Income by Country.xlsx"
+    Call WriteLog(yyyymm, "Step 7/7 - Output File", "RUNNING", "Creating output file: " & outPath)
 
     Dim niiData() As Variant
     Dim feeData()  As Variant
@@ -161,33 +247,41 @@ Private Sub RunPipeline(srcPath As String, yyyymm As Long)
 
     qsWb.Save
     qsWb.Close
+    Call WriteLog(yyyymm, "Step 7/7 - Output File", "OK", "Output file saved. QS SQL download.xlsx saved and closed.")
 
-    ' MoM analysis and email
+    '── MoM analysis ──────────────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "MoM Analysis", "RUNNING", "Calculating NII and Fee MoM contributors...")
     Dim niiText As String, feeText As String
     niiText = GetMomContributors(niiData, "NII", yyyymm)
     feeText = GetMomContributors(feeData, "Fee", yyyymm)
+    Call WriteLog(yyyymm, "MoM Analysis", "OK", "MoM analysis complete.")
+    Call WriteLog(yyyymm, "MoM - NII", "INFO", niiText)
+    Call WriteLog(yyyymm, "MoM - Fee", "INFO", feeText)
+
+    '── Email draft ───────────────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Email", "RUNNING", "Preparing draft email for review...")
     Call SendEmail(outPath, yyyymm, niiText, feeText)
+    Call WriteLog(yyyymm, "Email", "OK", "Draft email opened in Outlook. Please review and send manually.")
 
-    Application.StatusBar = False
-    Application.ScreenUpdating = True
-    Application.DisplayAlerts  = True
+    '── Done ──────────────────────────────────────────────────────────────────
+    Call WriteLog(yyyymm, "Pipeline", "OK", "ALL STEPS COMPLETE for " & MonthLabel(yyyymm) & " ✓")
 
+    Application.DisplayAlerts = True
     MsgBox "Done! Pipeline complete for " & MonthLabel(yyyymm) & "." & vbNewLine & vbNewLine & _
-           "Output file: " & outPath & vbNewLine & _
-           "Email sent to: " & EMAIL_TO, vbInformation, "PF Automation Complete"
+           "Output: " & outPath & vbNewLine & _
+           "Draft email is open in Outlook — please review and send.", _
+           vbInformation, "PF Automation Complete"
     Exit Sub
 
 PipelineError:
-    Application.StatusBar = False
-    Application.ScreenUpdating = True
-    Application.DisplayAlerts  = True
-    MsgBox "Error at step: " & Application.StatusBar & vbNewLine & vbNewLine & _
-           "Error " & Err.Number & ": " & Err.Description, vbCritical, "Pipeline Error"
+    Call WriteLog(yyyymm, "PIPELINE ERROR", "ERROR", "Error " & Err.Number & ": " & Err.Description)
+    Application.DisplayAlerts = True
+    MsgBox "Pipeline error:" & vbNewLine & vbNewLine & _
+           "Error " & Err.Number & ": " & Err.Description & vbNewLine & vbNewLine & _
+           "Check the Log sheet for details.", vbCritical, "Pipeline Error"
 
 Cleanup:
-    Application.StatusBar = False
-    Application.ScreenUpdating = True
-    Application.DisplayAlerts  = True
+    Application.DisplayAlerts = True
 End Sub
 
 '─── DATA CHECKS ──────────────────────────────────────────────────────────────
@@ -224,29 +318,35 @@ End Function
 
 '─── DELETE EXISTING ROWS ─────────────────────────────────────────────────────
 
-Private Sub DeleteExistingRows(ws As Worksheet, yyyymm As Long)
+Private Function DeleteExistingRows(ws As Worksheet, yyyymm As Long) As Long
     Dim lastRow As Long
     lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+    Dim count As Long
+    count = 0
 
     Dim i As Long
     For i = lastRow To 2 Step -1
         If IsNumeric(ws.Cells(i, COL_AA).Value) Then
             If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
                 ws.Rows(i).Delete
+                count = count + 1
             End If
         End If
     Next i
-End Sub
+    DeleteExistingRows = count
+End Function
 
 '─── COPY FILTERED ROWS ───────────────────────────────────────────────────────
 
-Private Sub CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long)
+Private Function CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long) As Long
     Dim srcLastRow As Long
     srcLastRow = srcWs.Cells(srcWs.Rows.Count, COL_AA).End(xlUp).Row
 
     Dim destRow As Long
     destRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row + 1
 
+    Dim count As Long
+    count = 0
     Dim i As Long
     For i = 2 To srcLastRow
         If IsNumeric(srcWs.Cells(i, COL_AA).Value) Then
@@ -254,11 +354,13 @@ Private Sub CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Lo
                 srcWs.Range(srcWs.Cells(i, 1), srcWs.Cells(i, 30)).Copy
                 qsWs.Cells(destRow, 1).PasteSpecial xlPasteValues
                 destRow = destRow + 1
+                count = count + 1
             End If
         End If
     Next i
     Application.CutCopyMode = False
-End Sub
+    CopyFilteredRows = count
+End Function
 
 '─── WRITE AE / AF FORMULAS ───────────────────────────────────────────────────
 
@@ -273,10 +375,7 @@ Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long)
     For i = 2 To lastRow
         If IsNumeric(ws.Cells(i, COL_AA).Value) Then
             If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
-                ' AE: F & E & N
                 ws.Cells(i, COL_AE).Formula = "=F" & i & "&E" & i & "&N" & i
-
-                ' AF: card check then dynamic vlookup
                 ws.Cells(i, COL_AF).Formula = _
                     "=IF(ISNUMBER(SEARCH(""card"",Q" & i & ")),""Card""," & _
                     "IFERROR(VLOOKUP(AE" & i & ",'" & CHECK_DUP_TAB & "'!" & _
@@ -391,7 +490,6 @@ NextRow:
         GetMomContributors = label & ": no MoM movement detected.": Exit Function
     End If
 
-    ' Bubble sort by absolute value descending
     Dim j As Long
     Dim tempN As String, tempM As Double
     For r = 1 To count - 1
@@ -462,7 +560,7 @@ Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, f
                    " Caselist - EOP Asset Balance and Total Income by Country"
         .Body    = body
         .Attachments.Add attachPath
-        .Display   ' Opens as draft for you to review before sending
+        .Display
     End With
 End Sub
 
