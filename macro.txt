@@ -290,6 +290,7 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
 
     qsWb.Save
     qsWb.Close
+    Set qsWb = Nothing
 
     '── Step 3: Update Direct Cost links rows 29-30 ────────────────────────────
     P2Log "Step 3/9 - Direct Cost Links", "RUNNING", "Updating P&L_PF rows 29-30..."
@@ -332,6 +333,7 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
     P2Log "Step 7/9 - Save Working", "RUNNING", "Saving " & newFileName & "..."
     Application.ScreenUpdating = False
     pfWb.Save
+    Set pfWb = Nothing
     P2Log "Step 7/9 - Save Working", "OK", "Saved."
 
     '── Step 8: Create sent file ───────────────────────────────────────────────
