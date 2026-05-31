@@ -378,12 +378,8 @@ PipelineError2:
     Dim en As Long: en = Err.Number
     Dim ed As String: ed = Err.Description
     On Error Resume Next
-    If Not pfWb Is Nothing Then
-        If pfWb.Name <> "" Then pfWb.Close False
-    End If
-    If Not qsWb Is Nothing Then
-        If qsWb.Name <> "" Then qsWb.Close False
-    End If
+    If Not pfWb Is Nothing Then pfWb.Close False
+    If Not qsWb Is Nothing Then qsWb.Close False
     On Error GoTo 0
     P2Log "PIPELINE ERROR", "ERROR", "Error " & en & ": " & ed
     Application.DisplayAlerts = True
