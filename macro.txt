@@ -601,12 +601,12 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
 
     ' Read key values
     Dim totIncYTD As Double: totIncYTD = P2V(plWs, 25, CN)
-    Dim totVsBgt$ As Double: totVsBgt$ = P2V(plWs, 25, CR)
-    Dim totVsBgt% As Double: totVsBgt% = P2V(plWs, 25, CS)
+    Dim totVsBgtD As Double: totVsBgtD = P2V(plWs, 25, CR)
+    Dim totVsBgtP As Double: totVsBgtP = P2V(plWs, 25, CS)
     Dim niiYTD    As Double: niiYTD    = P2V(plWs, 23, CN)
-    Dim niiVsBgt$ As Double: niiVsBgt$ = P2V(plWs, 23, CR)
+    Dim niiVsBgtD As Double: niiVsBgtD = P2V(plWs, 23, CR)
     Dim nonNiiYTD As Double: nonNiiYTD = P2V(plWs, 24, CN)
-    Dim nonNiiVs$ As Double: nonNiiVs$ = P2V(plWs, 24, CR)
+    Dim nonNiiVsD As Double: nonNiiVsD = P2V(plWs, 24, CR)
 
     Dim currNIM As Double: currNIM = P2V(plWs, 14, currCol)
     Dim prevNIM As Double: prevNIM = P2V(plWs, 14, prevCol)
@@ -616,7 +616,7 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim currEOP As Double: currEOP = P2V(plWs, 11, currCol)
     Dim prevEOP As Double: prevEOP = P2V(plWs, 11, prevCol)
     Dim eopMoM  As Double: eopMoM  = currEOP - prevEOP
-    Dim eopVs$  As Double: eopVs$  = P2V(plWs, 11, CR)
+    Dim eopVsD  As Double: eopVsD  = P2V(plWs, 11, CR)
     Dim bgtEOP  As Double: bgtEOP  = P2V(plWs, 11, CW)
 
     Dim currNonNii As Double: currNonNii = P2V(plWs, 24, currCol)
@@ -627,10 +627,10 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim cashYTD  As Double: cashYTD  = P2V(plWs, 76, CN)
     Dim gfmYTD   As Double: gfmYTD   = P2V(plWs, 74, CN)
     Dim tradeYTD As Double: tradeYTD = P2V(plWs, 75, CN)
-    Dim xsellVs$ As Double: xsellVs$ = P2V(plWs, 72, CR)
+    Dim xsellVsD As Double: xsellVsD = P2V(plWs, 72, CR)
 
     Dim dirExpYTD As Double: dirExpYTD = P2V(plWs, 31, CN)
-    Dim dirExpVs$ As Double: dirExpVs$ = P2V(plWs, 31, CR)
+    Dim dirExpVsD As Double: dirExpVsD = P2V(plWs, 31, CR)
 
     Dim hc As Long: hc = CLng(P2V(plWs, 68, currCol))
 
@@ -640,14 +640,14 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     ' YTD vs Budget
     t = "YTD Act Vs Budget" & vbNewLine
     t = t & "YTD " & mLbl & " Total Income of S$" & FM(Abs(totIncYTD)) & " was $" & _
-        FM(Abs(totVsBgt$)) & " (" & Format(Abs(totVsBgt%) * 100, "0") & "%) " & _
-        AB(totVsBgt$) & " budget, driven primarily by " & SW(niiVsBgt$) & " NII (" & _
-        FMS(niiVsBgt$) & ") offset by " & SW(nonNiiVs$) & " non-interest income of " & _
-        FMS(nonNiiVs$) & "." & vbNewLine & vbNewLine
+        FM(Abs(totVsBgtD)) & " (" & Format(Abs(totVsBgtP) * 100, "0") & "%) " & _
+        AB(totVsBgtD) & " budget, driven primarily by " & SW(niiVsBgtD) & " NII (" & _
+        FMS(niiVsBgtD) & ") offset by " & SW(nonNiiVsD) & " non-interest income of " & _
+        FMS(nonNiiVsD) & "." & vbNewLine & vbNewLine
 
     ' NII
-    t = t & "NII of " & FM(Abs(niiYTD)) & " was $" & FM(Abs(niiVsBgt$)) & " " & _
-        AB(niiVsBgt$) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
+    t = t & "NII of " & FM(Abs(niiYTD)) & " was $" & FM(Abs(niiVsBgtD)) & " " & _
+        AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
         "($" & FB(Abs(currEOP)) & "bn vs $" & FB(Abs(bgtEOP)) & "bn budget) and compressed NIM " & _
         "(" & Format(Abs(currNIM) * 100, "0.00") & "% vs " & Format(Abs(bgtNIM) * 100, "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
@@ -663,9 +663,9 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
 
     ' EOP Assets
     t = t & "EOP Asset Balance " & GD(eopMoM) & " $" & FB(Abs(eopMoM)) & " MoM to S$" & _
-        FB(Abs(currEOP)) & ", but remained $" & FB(Abs(eopVs$)) & " " & AB(eopVs$) & _
+        FB(Abs(currEOP)) & ", but remained $" & FB(Abs(eopVsD)) & " " & AB(eopVsD) & _
         " budget (budget: $" & FB(Abs(bgtEOP)) & ") resulting in a " & _
-        IIf(eopVs$ < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
+        IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
     ' Non-NII and Fees
     t = t & mLbl & " Non-NII " & ID(CLng(nonNiiMoM * 10)) & " $" & FM(Abs(nonNiiMoM)) & _
@@ -681,7 +681,7 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
 
     ' Direct Expense
     t = t & "YTD " & mLbl & " Direct Expense of $" & FM(Abs(dirExpYTD)) & " was $" & _
-        FM(Abs(dirExpVs$)) & " " & AB(dirExpVs$) & " budget." & vbNewLine & vbNewLine
+        FM(Abs(dirExpVsD)) & " " & AB(dirExpVsD) & " budget." & vbNewLine & vbNewLine
 
     ' Headcount
     t = t & mLbl & " Regional Headcount remained at " & hc & _
