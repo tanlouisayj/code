@@ -236,6 +236,9 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
     Application.DisplayAlerts = False
     Application.ScreenUpdating = False
 
+    Dim pfWb  As Workbook
+    Dim qsWb  As Workbook
+
     ' Add NEW RUN separator to log
     Dim logWs As Worksheet
     On Error Resume Next: Set logWs = ThisWorkbook.Sheets("Log"): On Error GoTo 0
@@ -254,7 +257,6 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
     logWs.Cells(sepRow, 1).Interior.Color = RGB(180, 220, 180)
     logWs.Cells(sepRow, 2).Interior.Color = RGB(180, 220, 180)
     logWs.Activate
-    Dim qsWb  As Workbook
 
     On Error GoTo PipelineError2
 
