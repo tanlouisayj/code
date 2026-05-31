@@ -836,9 +836,9 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     ' X-selling
     t = t & "YTD " & mLbl & " X-selling Income of " & FM(Abs(xsellYTD)) & _
         " is mainly derived from:" & vbNewLine
-    t = t & "- Cash +" & Format(Abs(cashYTD), "0.0") & "m" & vbNewLine
-    t = t & "- GFM Sales $" & Format(Abs(gfmYTD), "0.0") & "m; and" & vbNewLine
-    t = t & "- Trade +" & Format(Abs(tradeYTD), "0.0") & "m" & vbNewLine & vbNewLine
+    t = t & "- Cash +" & Format(Abs(cashYTD) / 1000000, "0.0") & "m" & vbNewLine
+    t = t & "- GFM Sales $" & Format(Abs(gfmYTD) / 1000000, "0.0") & "m; and" & vbNewLine
+    t = t & "- Trade +" & Format(Abs(tradeYTD) / 1000000, "0.0") & "m" & vbNewLine & vbNewLine
 
     ' Direct Expense
     t = t & "YTD " & mLbl & " Direct Expense of " & FM(Abs(dirExpYTD)) & _
@@ -885,18 +885,16 @@ Private Sub P2_UpdateTextBox(dashWs As Worksheet, commentary As String)
                 .Size = 9
                 .Name = "Calibri"
             End With
-            ' Bold only the known header lines
+            ' Bold only section header lines
             Dim lines() As String: lines = Split(commentary, vbNewLine)
             Dim charPos As Long: charPos = 1
             Dim i As Long
             For i = 0 To UBound(lines)
                 Dim lineLen As Long: lineLen = Len(lines(i))
                 If lineLen > 0 Then
-                    ' Bold header lines
+                    ' Bold section headers only
                     If lines(i) = "YTD Act Vs Budget" Or _
-                       InStr(lines(i), "Major ") = 1 Or _
-                       InStr(lines(i), "Key fee") > 0 Or _
-                       InStr(lines(i), "X-selling Income") > 0 Then
+                       Left(Trim(lines(i)), 6) = "Major " Then
                         .Characters(charPos, lineLen).Font.Bold = True
                     End If
                 End If
@@ -983,15 +981,17 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
         On Error GoTo 0
     Next t
 
-    ' Also hide Working+PF pivots and Normalised NIM if they exist
+    ' Also hide Working+PF pivots, Normalised NIM and Working tab
     Dim extraHide As Variant
-    extraHide = Array(T_WORK_PIVOTS, T_NORM_NIM)
+    extraHide = Array(T_WORK_PIVOTS, T_NORM_NIM, T_WORKING)
     Dim h As Long
     For h = 0 To UBound(extraHide)
         On Error Resume Next
         Set ws = sentWb.Sheets(extraHide(h))
-        If Not ws Is Nothing Then ws.Visible = xlSheetHidden
-        Set ws = Nothing
+        If Not ws Is Nothing Then
+            ws.Visible = xlSheetHidden
+            Set ws = Nothing
+        End If
         On Error GoTo 0
     Next h
 
@@ -1096,14 +1096,14 @@ Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As St
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
 
-    For r = 1 To 15
+    ' Search row 5 first (confirmed PF Fees pivot YYYYMM header row)
+    ' then fallback to rows 1-15
+    For r = 5 To 5  ' check row 5 first
         For c = 1 To lastCol
             Dim cv As Variant: cv = feeWs.Cells(r, c).Value
             Dim cvLong As Long: cvLong = 0
-            ' Handle number, text, or date serial
             If IsNumeric(cv) And Not IsEmpty(cv) Then
                 Dim cvD As Double: cvD = CDbl(cv)
-                ' Date serial range for 2020-2030 (approx 43831 to 47481)
                 If cvD > 43000 And cvD < 50000 Then
                     Dim dt As Date: dt = CDate(cv)
                     cvLong = Year(dt) * 100 + Month(dt)
@@ -1112,14 +1112,37 @@ Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As St
                 End If
             ElseIf Not IsEmpty(cv) Then
                 Dim cvStr As String: cvStr = Trim(CStr(cv))
-                If Len(cvStr) = 6 And IsNumeric(cvStr) Then
-                    cvLong = CLng(cvStr)
-                End If
+                If Len(cvStr) = 6 And IsNumeric(cvStr) Then cvLong = CLng(cvStr)
             End If
             If cvLong = yyyymm Then currCol = c: hdRow = r
             If cvLong = prevMM  Then prevCol = c: hdRow = r
         Next c
     Next r
+
+    ' Fallback: scan rows 1-15 if row 5 didn't work
+    If currCol = 0 Then
+        For r = 1 To 15
+            For c = 1 To lastCol
+                Dim cv2 As Variant: cv2 = feeWs.Cells(r, c).Value
+                Dim cvLong2 As Long: cvLong2 = 0
+                If IsNumeric(cv2) And Not IsEmpty(cv2) Then
+                    Dim cvD2 As Double: cvD2 = CDbl(cv2)
+                    If cvD2 > 43000 And cvD2 < 50000 Then
+                        Dim dt2 As Date: dt2 = CDate(cv2)
+                        cvLong2 = Year(dt2) * 100 + Month(dt2)
+                    ElseIf cvD2 >= 200001 And cvD2 <= 209912 Then
+                        cvLong2 = CLng(cv2)
+                    End If
+                ElseIf Not IsEmpty(cv2) Then
+                    Dim cvStr2 As String: cvStr2 = Trim(CStr(cv2))
+                    If Len(cvStr2) = 6 And IsNumeric(cvStr2) Then cvLong2 = CLng(cvStr2)
+                End If
+                If cvLong2 = yyyymm Then currCol = c: hdRow = r
+                If cvLong2 = prevMM  Then prevCol = c: hdRow = r
+            Next c
+        Next r
+    End If
+
 
     If currCol = 0 Or hdRow = 0 Then
         P2_GetFeeContributors = "Major " & currLbl & " Fees: [column not found in PF Fees tab]"
@@ -1259,12 +1282,21 @@ Private Sub P2_FormatSentTab(wb As Workbook, tabName As String)
         Next c
     Next r
 
-    ' AutoFit with min width 12
+    ' AutoFit with min width 12, format numeric columns with comma separator
     ws.Cells.WrapText = False
     For c = 1 To lastCol
         ws.Columns(c).AutoFit
         If ws.Columns(c).ColumnWidth < 12 Then ws.Columns(c).ColumnWidth = 12
     Next c
+
+    ' Format all numeric cells from row 3 onwards with comma thousand separator
+    Dim numRng As Range
+    On Error Resume Next
+    Set numRng = ws.Range(ws.Cells(3, 4), ws.Cells(lastRow, lastCol))
+    If Not numRng Is Nothing Then
+        numRng.NumberFormat = "#,##0.000"
+    End If
+    On Error GoTo 0
 End Sub
 
 '─── LOG ───────────────────────────────────────────────────────────────────────
@@ -1321,17 +1353,16 @@ End Function
 
 ' Dashboard cells store actual SGD values — divide for display
 ' Note: $ sign NOT included here — added explicitly in commentary text
-' Dashboard P&L values are already in $m (e.g. 58.8 = $58.8m)
-' FM formats as "$X.Xm", FB formats as "$X.Xb" (divides by 1000 since already in $m)
+' Dashboard P&L values are raw SGD (e.g. 58762405 = $58.8m)
 Private Function FM(v As Double) As String
-    FM = "$" & Format(Abs(v), "0.0") & "m"
+    FM = "$" & Format(Abs(v) / 1000000, "0.0") & "m"
 End Function
 Private Function FMS(v As Double) As String
-    If v >= 0 Then FMS = "+$" & Format(v, "0.0") & "m" Else FMS = "-$" & Format(Abs(v), "0.0") & "m"
+    If v >= 0 Then FMS = "+$" & Format(v / 1000000, "0.0") & "m" Else FMS = "-$" & Format(Abs(v) / 1000000, "0.0") & "m"
 End Function
 Private Function FB(v As Double) As String
-    ' EOP assets in $bn — divide by 1000 since dashboard stores in $m
-    FB = "$" & Format(Abs(v) / 1000, "0.0") & "b"
+    ' Assets in raw SGD — divide by 1bn
+    FB = "$" & Format(Abs(v) / 1000000000, "0.0") & "b"
 End Function
 Private Function AB(v As Double) As String:  AB  = IIf(v >= 0, "above", "below"):            End Function
 Private Function SW(v As Double) As String:  SW  = IIf(v >= 0, "stronger", "weaker"):        End Function
