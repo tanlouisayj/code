@@ -483,11 +483,13 @@ End Sub
 
 Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
     ' Find columns for current period NII and Avg Asset Balance
+    ' Product Avg Asset Balance is always immediately to the RIGHT of the NII column
+    ' (searching for "Asset" also matches "NII on Assets" so we use colNII+1 instead)
     Dim colNII   As Long: colNII   = P2_FindNIMCol(ws, yyyymm, "NII")
-    Dim colAsset As Long: colAsset = P2_FindNIMCol(ws, yyyymm, "Asset")
+    Dim colAsset As Long: colAsset = colNII + 1   ' e.g. col I = NII, col J = Avg Asset Balance
 
-    If colNII = 0 Or colAsset = 0 Then
-        P2Log "Normalised NIM %", "INFO", "Could not find NII or Asset column for " & yyyymm & " — NIM % formula not updated."
+    If colNII = 0 Then
+        P2Log "Normalised NIM %", "INFO", "Could not find NII column for " & yyyymm & " — NIM % formula not updated."
         Exit Sub
     End If
 
