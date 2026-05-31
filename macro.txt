@@ -758,6 +758,143 @@ NextDCRow:
     Application.AskToUpdateLinks = savedAsk
 End Sub
 
+'─── DIAGNOSTIC: run this manually to see exactly what cells are being read ────
+' Run from VBA Immediate window or assign to a button:
+'   Call DiagnoseDCLinks
+' It will pop up a message box showing:
+'   - Which workbook and sheet it found as P&L_PF
+'   - Which columns it resolved as prevCol / currCol
+'   - The raw .Formula of rows 29 and 30 in prevCol (what it copies FROM)
+'   - The raw .Formula of rows 29 and 30 in currCol (what is currently there)
+'   - The new formula it WOULD write (without actually writing it)
+
+Public Sub DiagnoseDCLinks()
+
+    ' ── Find the working workbook ─────────────────────────────────────────────
+    Dim pfWb As Workbook
+    Dim wb As Workbook
+    For Each wb In Workbooks
+        If InStr(1, LCase(wb.Name), "project_finance") > 0 And _
+           InStr(1, LCase(wb.Name), "working") > 0 Then
+            Set pfWb = wb
+            Exit For
+        End If
+    Next wb
+
+    If pfWb Is Nothing Then
+        MsgBox "Could not find a 'Project_Finance * (working)' workbook open." & vbNewLine & _
+               "Open the working file first, then run DiagnoseDCLinks.", vbCritical
+        Exit Sub
+    End If
+
+    ' ── Find P&L_PF sheet ────────────────────────────────────────────────────
+    Dim plWs As Worksheet
+    On Error Resume Next
+    Set plWs = pfWb.Sheets(T_PL_PF)
+    On Error GoTo 0
+
+    If plWs Is Nothing Then
+        MsgBox "Sheet '" & T_PL_PF & "' not found in " & pfWb.Name, vbCritical
+        Exit Sub
+    End If
+
+    ' ── Read yyyymm from the working file name ────────────────────────────────
+    Dim yyyymm As Long
+    yyyymm = P2_ExtractPeriod(pfWb.Name)
+    If yyyymm = 0 Then
+        ' Ask user
+        Dim inp As String
+        inp = InputBox("Could not detect period from filename." & vbNewLine & _
+                       "Enter the reporting period as YYYYMM (e.g. 202604 for Apr 26):", _
+                       "DiagnoseDCLinks", "202604")
+        If inp = "" Then Exit Sub
+        If Not IsNumeric(inp) Then MsgBox "Invalid period.", vbCritical: Exit Sub
+        yyyymm = CLng(inp)
+    End If
+
+    Dim prevMM  As Long:   prevMM  = P2_PrevYYYYMM(yyyymm)
+    Dim shortMo As String: shortMo = Left(P2_MonthLabel(yyyymm), 3)
+    Dim prevMo  As String: prevMo  = Left(P2_MonthLabel(prevMM), 3)
+    Dim yr2     As String: yr2     = Right(CStr(yyyymm \ 100), 2)
+    Dim prevYr2 As String: prevYr2 = Right(CStr(prevMM \ 100), 2)
+
+    ' ── Find prevCol and currCol ──────────────────────────────────────────────
+    Dim currCol As Long: currCol = 0
+    Dim prevCol As Long: prevCol = 0
+    Dim c As Long
+    Dim colMap As String: colMap = "Row 8 scan (cols 1-40):" & vbNewLine
+    For c = 1 To 40
+        Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
+        If hdr <> "" Then colMap = colMap & "  col " & c & " = """ & hdr & """" & vbNewLine
+        If InStr(1, hdr, shortMo, vbTextCompare) > 0 And currCol = 0 Then currCol = c
+        If InStr(1, hdr, prevMo,  vbTextCompare) > 0 And prevCol = 0 Then prevCol = c
+    Next c
+    If currCol = 0 Then currCol = 5 + (yyyymm Mod 100)
+    If prevCol = 0 Then prevCol = currCol - 1
+
+    ' ── Read all four cells ───────────────────────────────────────────────────
+    Dim f29prev As String: f29prev = ""
+    Dim f30prev As String: f30prev = ""
+    Dim f29curr As String: f29curr = ""
+    Dim f30curr As String: f30curr = ""
+    On Error Resume Next
+    f29prev = plWs.Cells(29, prevCol).Formula
+    f30prev = plWs.Cells(30, prevCol).Formula
+    f29curr = plWs.Cells(29, currCol).Formula
+    f30curr = plWs.Cells(30, currCol).Formula
+    On Error GoTo 0
+
+    ' ── Build what the new formulas WOULD be ─────────────────────────────────
+    Dim new29 As String: new29 = "(skipped — source not a valid external link)"
+    Dim new30 As String: new30 = "(skipped — source not a valid external link)"
+
+    If Left(f29prev, 2) = "='" And InStr(f29prev, "[") > 0 Then
+        new29 = Replace(f29prev, prevMo & " " & prevYr2, shortMo & " " & yr2)
+        new29 = P2_AdvanceExtColByN(new29, 1)
+    End If
+    If Left(f30prev, 2) = "='" And InStr(f30prev, "[") > 0 Then
+        new30 = Replace(f30prev, prevMo & " " & prevYr2, shortMo & " " & yr2)
+        new30 = P2_AdvanceExtColByN(new30, 1)
+    End If
+
+    ' ── Show results ─────────────────────────────────────────────────────────
+    Dim msg As String
+    msg = "=== DiagnoseDCLinks ===" & vbNewLine & vbNewLine
+    msg = msg & "Workbook : " & pfWb.FullName & vbNewLine
+    msg = msg & "Sheet    : " & plWs.Name & vbNewLine
+    msg = msg & "Period   : " & yyyymm & "  (" & shortMo & " " & yr2 & ")" & vbNewLine
+    msg = msg & "Prev Mo  : " & prevMM  & "  (" & prevMo  & " " & prevYr2 & ")" & vbNewLine
+    msg = msg & vbNewLine
+    msg = msg & "prevCol  : " & prevCol & "  (reads FROM here)" & vbNewLine
+    msg = msg & "currCol  : " & currCol & "  (writes TO here)" & vbNewLine
+    msg = msg & vbNewLine
+    msg = msg & "--- SOURCE FORMULAS (prevCol = col " & prevCol & ") ---" & vbNewLine
+    msg = msg & "Row 29 .Formula : [" & f29prev & "]" & vbNewLine
+    msg = msg & "Row 30 .Formula : [" & f30prev & "]" & vbNewLine
+    msg = msg & vbNewLine
+    msg = msg & "--- CURRENT TARGET (currCol = col " & currCol & ") ---" & vbNewLine
+    msg = msg & "Row 29 .Formula : [" & f29curr & "]" & vbNewLine
+    msg = msg & "Row 30 .Formula : [" & f30curr & "]" & vbNewLine
+    msg = msg & vbNewLine
+    msg = msg & "--- WOULD WRITE ---" & vbNewLine
+    msg = msg & "Row 29 : " & new29 & vbNewLine
+    msg = msg & "Row 30 : " & new30 & vbNewLine
+    msg = msg & vbNewLine
+    msg = msg & colMap
+
+    ' Copy to clipboard too so you can paste the full text
+    Dim dataObj As Object
+    On Error Resume Next
+    Set dataObj = CreateObject("new:{1C3B4210-F441-11CE-B9EA-00AA006B1A69}")
+    If Not dataObj Is Nothing Then
+        dataObj.SetText msg
+        dataObj.PutInClipboard
+    End If
+    On Error GoTo 0
+
+    MsgBox msg, vbInformation, "DiagnoseDCLinks — " & pfWb.Name
+End Sub
+
 '─── ADVANCE THE $COL$ AFTER "!" BY N STEPS ───────────────────────────────────
 ' Used when the template column is not adjacent to the target column.
 ' e.g. template is col H (Mar, $Z$31), target is col I (Apr, offset=1) → $AA$31
