@@ -784,8 +784,10 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim dirExpYTD As Double: dirExpYTD = P2V(dashWs, 31, CN)
     Dim dirExpVsD As Double: dirExpVsD = P2V(dashWs, 31, CR)
 
-    ' Headcount
-    Dim hc As Long: hc = CLng(P2V(dashWs, 69, currCol))
+    ' Headcount — I68 = current month actual, O68 = budget (col O = 15)
+    Dim hc    As Long: hc    = CLng(P2V(dashWs, 68, currCol))
+    Dim hcBgt As Long: hcBgt = CLng(P2V(dashWs, 68, 15))
+    Dim hcVsBgt As Long: hcVsBgt = hc - hcBgt
 
     ' Build commentary
     Dim t As String
@@ -823,10 +825,14 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         " budget (budget: $" & FB(Abs(bgtEOP)) & ") resulting in a " & _
         IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
-    ' Non-NII and Fees
+    ' Non-NII and Fees — pull top contributors from PF Fees tab
+    Dim feeWs As Worksheet
+    On Error Resume Next: Set feeWs = plWs.Parent.Sheets(T_PF_FEES): On Error GoTo 0
+    Dim feeText As String: feeText = P2_GetFeeContributors(feeWs, yyyymm)
+
     t = t & mLbl & " Non-NII " & ID(CLng(nonNiiMoM * 10)) & " $" & FM(Abs(nonNiiMoM)) & _
-        " MoM to $" & FM(Abs(currNonNii)) & ". Key fee contributors:" & vbNewLine
-    t = t & "[UPDATE: Copy fee contributors from Caselist email]" & vbNewLine & vbNewLine
+        " MoM to $" & FM(Abs(currNonNii)) & "." & vbNewLine
+    t = t & feeText & vbNewLine
 
     ' X-selling
     t = t & "YTD " & mLbl & " X-selling Income of $" & FM(Abs(xsellYTD)) & _
@@ -841,7 +847,7 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
 
     ' Headcount
     t = t & mLbl & " Regional Headcount remained at " & hc & _
-        "; [UPDATE: -X vs Dec YY and -Y vs Bgt YY]."
+        "; " & Format(hcVsBgt, "+0;-0") & " vs Bgt."
 
     P2_BuildCommentary = t
 End Function
@@ -872,6 +878,30 @@ Private Sub P2_UpdateTextBox(dashWs As Worksheet, commentary As String)
         With target.TextFrame
             .AutoSize = False
             .Characters.Text = commentary
+            ' Apply base formatting — plain, not bold, not underlined
+            With .Characters.Font
+                .Bold = False
+                .Underline = xlUnderlineStyleNone
+                .Size = 9
+                .Name = "Calibri"
+            End With
+            ' Bold only the known header lines
+            Dim lines() As String: lines = Split(commentary, vbNewLine)
+            Dim charPos As Long: charPos = 1
+            Dim i As Long
+            For i = 0 To UBound(lines)
+                Dim lineLen As Long: lineLen = Len(lines(i))
+                If lineLen > 0 Then
+                    ' Bold header lines
+                    If lines(i) = "YTD Act Vs Budget" Or _
+                       InStr(lines(i), "Major ") = 1 Or _
+                       InStr(lines(i), "Key fee") > 0 Or _
+                       InStr(lines(i), "X-selling Income") > 0 Then
+                        .Characters(charPos, lineLen).Font.Bold = True
+                    End If
+                End If
+                charPos = charPos + lineLen + 1  ' +1 for newline char
+            Next i
         End With
     Else
         MsgBox "Commentary text box not found on " & T_PL_DASH & "." & vbNewLine & _
@@ -907,6 +937,11 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
     P2_PasteValues sentWb, T_INC_CNTRY
     P2_PasteValues sentWb, T_XSELL
     P2_PasteValues sentWb, T_CUST_LIST
+
+    ' Format visible pivot tabs like caselist (delete top 3 rows, colour headers, autofit)
+    P2_FormatSentTab sentWb, T_PF_FEES
+    P2_FormatSentTab sentWb, T_XSELL
+    P2_FormatSentTab sentWb, T_CUST_LIST
 
     ' 2. Close all groups
     Dim ws As Worksheet
@@ -1014,10 +1049,11 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
 
     Dim mLbl As String: mLbl = P2_MonthLabel(yyyymm)
 
+
     ' Build HTML body
     Dim imgTag As String: imgTag = ""
     If imgOK And Dir(imgPath) <> "" Then
-        imgTag = "<img src='cid:pfdashboard.png' style='max-width:100%;border:1px solid #ccc;'/><br><br>"
+        imgTag = "<p><i>Dashboard snapshot attached: PF_Dashboard_" & yyyymm & ".png</i></p>"
     End If
 
     Dim htmlComm As String
@@ -1027,8 +1063,9 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
     html = "<html><body style='font-family:Calibri;font-size:11pt;'>" & _
            "<p>Hi " & P2_Greeting() & ",</p>" & _
            "<p>Attached Project Finance " & mLbl & " Financials for your information.</p>" & _
-           imgTag & _
+           imgTag & "<br>" & _
            "<p>" & htmlComm & "</p>" & _
+           "<p>Please let me know if you have any questions or require further information.</p>" & _
            "<p>Regards,<br>" & P2_YourName() & "</p>" & _
            "</body></html>"
 
@@ -1038,11 +1075,9 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
         .Subject = mLbl & " PF Financials"
         .Attachments.Add sentPath
 
+        ' Attach dashboard snapshot as regular attachment
         If imgOK And Dir(imgPath) <> "" Then
-            Dim att As Object
-            Set att = .Attachments.Add(imgPath, 1, 0)
-            att.PropertyAccessor.SetProperty _
-                "http://schemas.microsoft.com/mapi/proptag/0x3712001F", "pfdashboard.png"
+            .Attachments.Add imgPath
         End If
 
         .HTMLBody = html
@@ -1052,6 +1087,188 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
 ErrH:
     MsgBox "Email could not be opened automatically." & vbNewLine & _
            "Sent file: " & sentPath, vbExclamation, "Email Warning"
+End Sub
+
+'─── FEE CONTRIBUTORS FROM PF FEES TAB ────────────────────────────────────────
+
+Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As String
+    On Error GoTo ErrH
+    If feeWs Is Nothing Then
+        P2_GetFeeContributors = "Major " & P2_MonthLabel(yyyymm) & " Fees:" & vbNewLine & _
+                                "[UPDATE: Check PF Fees tab]"
+        Exit Function
+    End If
+
+    Dim prevMM As Long: prevMM = P2_PrevYYYYMM(yyyymm)
+    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
+    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
+
+    ' Find header row with YYYYMM (check both numeric and text)
+    Dim lastCol As Long: lastCol = feeWs.Cells(1, feeWs.Columns.Count).End(xlToLeft).Column
+    Dim lastRow As Long: lastRow = feeWs.Cells(feeWs.Rows.Count, 1).End(xlUp).Row
+    Dim r As Long, c As Long
+    Dim hdRow As Long: hdRow = 0
+    Dim currCol As Long: currCol = 0
+    Dim prevCol As Long: prevCol = 0
+
+    For r = 1 To 10
+        For c = 1 To lastCol
+            Dim cv As Variant: cv = feeWs.Cells(r, c).Value
+            If IsNumeric(cv) Then
+                If CLng(cv) = yyyymm Then currCol = c: hdRow = r
+                If CLng(cv) = prevMM  Then prevCol = c: hdRow = r
+            ElseIf CStr(cv) = CStr(yyyymm) Then
+                currCol = c: hdRow = r
+            ElseIf CStr(cv) = CStr(prevMM) Then
+                prevCol = c: hdRow = r
+            End If
+        Next c
+    Next r
+
+    If currCol = 0 Or hdRow = 0 Then
+        P2_GetFeeContributors = "Major " & currLbl & " Fees: [column not found in PF Fees tab]"
+        Exit Function
+    End If
+
+    ' Collect customer names (col B) and fee values for current and prev month
+    ' Skip blank rows and total rows
+    Dim cNames() As String, cVals() As Double, cCnt As Long: cCnt = 0
+    Dim pNames() As String, pVals() As Double, pCnt As Long: pCnt = 0
+
+    For r = hdRow + 1 To lastRow
+        Dim rowLbl As String: rowLbl = Trim(CStr(feeWs.Cells(r, 1).Value))
+        If rowLbl = "" Then GoTo NextFeeRow
+        If InStr(1, LCase(rowLbl), "total") > 0 Then GoTo NextFeeRow
+
+        ' Customer name from col B
+        Dim custN As String: custN = Trim(CStr(feeWs.Cells(r, 2).Value))
+        If custN = "" Then custN = rowLbl
+
+        ' Current month balance
+        Dim cVal As Double: cVal = 0
+        If IsNumeric(feeWs.Cells(r, currCol).Value) Then cVal = CDbl(feeWs.Cells(r, currCol).Value)
+        If Abs(cVal) > 0 Then
+            cCnt = cCnt + 1
+            ReDim Preserve cNames(1 To cCnt): ReDim Preserve cVals(1 To cCnt)
+            cNames(cCnt) = custN: cVals(cCnt) = cVal
+        End If
+
+        ' Previous month balance
+        If prevCol > 0 Then
+            Dim pVal As Double: pVal = 0
+            If IsNumeric(feeWs.Cells(r, prevCol).Value) Then pVal = CDbl(feeWs.Cells(r, prevCol).Value)
+            If Abs(pVal) > 0 Then
+                pCnt = pCnt + 1
+                ReDim Preserve pNames(1 To pCnt): ReDim Preserve pVals(1 To pCnt)
+                pNames(pCnt) = custN: pVals(pCnt) = pVal
+            End If
+        End If
+NextFeeRow:
+    Next r
+
+    ' Sort both by absolute value descending
+    Dim i As Long, j As Long, tn As String, tv As Double
+    If cCnt > 1 Then
+        For i = 1 To cCnt - 1
+            For j = 1 To cCnt - i
+                If Abs(cVals(j)) < Abs(cVals(j+1)) Then
+                    tn = cNames(j): tv = cVals(j)
+                    cNames(j) = cNames(j+1): cVals(j) = cVals(j+1)
+                    cNames(j+1) = tn: cVals(j+1) = tv
+                End If
+            Next j
+        Next i
+    End If
+    If pCnt > 1 Then
+        For i = 1 To pCnt - 1
+            For j = 1 To pCnt - i
+                If Abs(pVals(j)) < Abs(pVals(j+1)) Then
+                    tn = pNames(j): tv = pVals(j)
+                    pNames(j) = pNames(j+1): pVals(j) = pVals(j+1)
+                    pNames(j+1) = tn: pVals(j+1) = tv
+                End If
+            Next j
+        Next i
+    End If
+
+    ' Build text — top 3 each
+    Dim result As String
+    result = "Major " & currLbl & " Fees:" & vbNewLine
+    Dim maxC As Long: maxC = Application.Min(3, cCnt)
+    For i = 1 To maxC
+        result = result & i & ") " & cNames(i) & " $" & _
+                 Format(Abs(cVals(i)) / 1000000, "0.0") & "m" & vbNewLine
+    Next i
+
+    If prevCol > 0 And pCnt > 0 Then
+        result = result & vbNewLine & "Major " & prevLbl & " Fees:" & vbNewLine
+        Dim maxP As Long: maxP = Application.Min(3, pCnt)
+        For i = 1 To maxP
+            result = result & i & ") " & pNames(i) & " $" & _
+                     Format(Abs(pVals(i)) / 1000000, "0.0") & "m" & vbNewLine
+        Next i
+    End If
+
+    P2_GetFeeContributors = result
+    Exit Function
+ErrH: P2_GetFeeContributors = "Major Fees: [error reading PF Fees tab]"
+End Function
+
+'─── FORMAT SENT TABS (like caselist output) ───────────────────────────────────
+
+Private Sub P2_FormatSentTab(wb As Workbook, tabName As String)
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = wb.Sheets(tabName)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    ' Delete top 3 rows
+    ws.Rows("1:3").Delete
+
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+
+    ' Find true last column (scan first 10 rows)
+    Dim lastCol As Long: lastCol = 1
+    Dim r As Long, c As Long
+    For r = 1 To Application.Min(10, lastRow)
+        Dim rc As Long: rc = ws.Cells(r, ws.Columns.Count).End(xlToLeft).Column
+        If rc > lastCol Then lastCol = rc
+    Next r
+
+    ' Row 1: light blue header
+    With ws.Range(ws.Cells(1, 1), ws.Cells(1, lastCol))
+        .Font.Bold = True
+        .Font.Color = RGB(0, 0, 0)
+        .Interior.Color = RGB(192, 230, 245)
+    End With
+
+    ' Row 2: red header, white bold
+    With ws.Range(ws.Cells(2, 1), ws.Cells(2, lastCol))
+        .Font.Bold = True
+        .Font.Color = RGB(255, 255, 255)
+        .Interior.Color = RGB(192, 0, 0)
+    End With
+
+    ' Bold cols A and B
+    ws.Range(ws.Cells(1, 1), ws.Cells(lastRow, 2)).Font.Bold = True
+
+    ' Bold total rows
+    For r = 3 To lastRow
+        For c = 1 To lastCol
+            If Not IsEmpty(ws.Cells(r, c).Value) Then
+                If InStr(1, LCase(CStr(ws.Cells(r, c).Value)), "total") > 0 Then
+                    ws.Rows(r).Font.Bold = True: Exit For
+                End If
+            End If
+        Next c
+    Next r
+
+    ' AutoFit with min width 12
+    ws.Cells.WrapText = False
+    For c = 1 To lastCol
+        ws.Columns(c).AutoFit
+        If ws.Columns(c).ColumnWidth < 12 Then ws.Columns(c).ColumnWidth = 12
+    Next c
 End Sub
 
 '─── LOG ───────────────────────────────────────────────────────────────────────
@@ -1106,9 +1323,16 @@ Private Function P2V(ws As Worksheet, r As Long, c As Long) As Double
     If IsNumeric(v) Then P2V = CDbl(v) Else P2V = 0
 End Function
 
-Private Function FM(v As Double) As String:  FM  = "$" & Format(v, "0.0") & "m":             End Function
-Private Function FMS(v As Double) As String: FMS = IIf(v >= 0, "+", "-") & FM(Abs(v)):       End Function
-Private Function FB(v As Double) As String:  FB  = "$" & Format(v, "0.0") & "b":             End Function
+' Dashboard cells store actual SGD values — divide for display
+Private Function FM(v As Double) As String
+    FM = "$" & Format(v / 1000000, "0.0") & "m"
+End Function
+Private Function FMS(v As Double) As String
+    If v >= 0 Then FMS = "+" & FM(v) Else FMS = "-" & FM(Abs(v))
+End Function
+Private Function FB(v As Double) As String
+    FB = "$" & Format(v / 1000000000, "0.0") & "b"
+End Function
 Private Function AB(v As Double) As String:  AB  = IIf(v >= 0, "above", "below"):            End Function
 Private Function SW(v As Double) As String:  SW  = IIf(v >= 0, "stronger", "weaker"):        End Function
 Private Function ID(v As Long) As String:    ID  = IIf(v >= 0, "increased", "decreased"):    End Function
