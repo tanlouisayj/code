@@ -1,20 +1,20 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v10)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v11)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
-' CHANGES IN v10 (vs v9):
-'   - P2_UpdateDCLinks completely rewritten from scratch (simpler):
-'       * Finds prevCol and currCol by scanning row 8 for the previous and
-'         current month headers.
-'       * Reads H29 and H30 (prevCol rows 29-30) directly — no scanning loops,
-'         no template strategies, no complexity.
-'       * Does exactly two replacements on each formula:
-'           1. Old month+year → new month+year  (e.g. "Mar 26" → "Apr 26")
-'           2. Advance the external-file column letter by 1  (e.g. Z → AA)
-'       * Writes the result to currCol rows 29 and 30.
-'       * Logs both the source formula and the new formula so failures are
-'         immediately visible in the Log sheet.
+' CHANGES IN v11 (vs v10):
+'   - P2_UpdateDCLinks:
+'       * ROOT CAUSE FOUND (from Log sheet): Row 30 formula is a SUM range:
+'           =SUM('\\server\[Direct Cost - Mar 26 - PF.xls]PF'!$Z$15:$Z$18)
+'         The old check (Left(srcF,2)="='") only matched simple cell refs so
+'         the SUM formula was always skipped — hence I30 always blank.
+'       * Fix: check is now Left(srcF,1)="=" AND InStr(srcF,"[")>0 which
+'         accepts both simple refs and SUM/other formula types.
+'       * New helper P2_AdvanceAllExtCols replaces P2_AdvanceExtColByN for
+'         this sub: walks the whole formula string after "!" and advances
+'         EVERY $COL$ pattern, so $Z$15:$Z$18 becomes $AA$15:$AA$18
+'         (both column refs in the range get advanced, not just the first).
 ' CHANGES IN v8 (vs v7):
 '   - P2_UpdateDCLinks (Step 3):
 '       * Completely rewrote row-29/30 write loop into two separate blocks.
@@ -702,26 +702,22 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Dim r As Long
     For r = 29 To 30
 
-        ' Read the formula from prevCol using FormulaLocal (works even on closed-source links)
+        ' Read the formula from prevCol
         Dim srcF As String: srcF = ""
         On Error Resume Next
-        srcF = plWs.Cells(r, prevCol).FormulaLocal
+        srcF = plWs.Cells(r, prevCol).Formula
         On Error GoTo 0
-
-        ' FormulaLocal uses local decimal separators — normalise to Formula-style
-        ' by re-reading as Formula if it starts correctly
-        If Left(srcF, 2) <> "='" Then
-            On Error Resume Next
-            srcF = plWs.Cells(r, prevCol).Formula
-            On Error GoTo 0
-        End If
 
         P2Log "Direct Cost Links", "INFO", _
               "Row " & r & " prevCol formula: " & Left(srcF, 120)
 
-        If Left(srcF, 2) <> "='" Or InStr(srcF, "[") = 0 Then
+        ' Only require that it's a formula containing an external link "[..."
+        ' Row 29 is a simple ref:  ='\\server\[Direct Cost - Mar 26 - PF.xls]PF'!$Z$31
+        ' Row 30 is a SUM:         =SUM('\\server\[Direct Cost - Mar 26 - PF.xls]PF'!$Z$15:$Z$18)
+        ' Both contain "[" and the month name — that's all we need to check
+        If Left(srcF, 1) <> "=" Or InStr(srcF, "[") = 0 Then
             P2Log "Direct Cost Links", "INFO", _
-                  "Row " & r & ": prevCol formula not a valid external link — skipping."
+                  "Row " & r & ": prevCol has no external link — skipping."
             GoTo NextDCRow
         End If
 
@@ -730,8 +726,10 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
         newF = srcF
         newF = Replace(newF, prevMo & " " & prevYr2, shortMo & " " & yr2)
 
-        ' Step 2: advance the external-file column letter by 1 (e.g. $Z$ → $AA$)
-        newF = P2_AdvanceExtColByN(newF, 1)
+        ' Step 2: advance ALL external-file column letters by 1 (e.g. $Z$ → $AA$, $Z$15:$Z$18 → $AA$15:$AA$18)
+        ' P2_AdvanceExtColByN only moves the FIRST col ref after "!" — for a range like $Z$15:$Z$18
+        ' we need to advance both. Call it twice: once for the first ref, once for the second.
+        newF = P2_AdvanceAllExtCols(newF)
 
         P2Log "Direct Cost Links", "INFO", _
               "Row " & r & " new formula:     " & Left(newF, 120)
@@ -757,6 +755,65 @@ NextDCRow:
     Application.DisplayAlerts    = savedAlerts
     Application.AskToUpdateLinks = savedAsk
 End Sub
+
+'─── ADVANCE ALL $COL$ REFERENCES AFTER "!" IN AN EXTERNAL LINK FORMULA ────────
+' Handles both simple refs  ='...'!$Z$31
+' and ranges               =SUM('...'!$Z$15:$Z$18)
+' Walks through the formula string and advances every $LETTER(S)$ pattern
+' that appears after the "!" of an external link.
+
+Private Function P2_AdvanceAllExtCols(f As String) As String
+    ' Find the "!" that marks the end of the external file/sheet reference
+    Dim bangPos As Long: bangPos = InStr(f, "!")
+    If bangPos = 0 Then P2_AdvanceAllExtCols = f: Exit Function
+
+    ' Everything before and including "!" stays untouched
+    Dim prefix As String: prefix = Left(f, bangPos)
+    Dim rest   As String: rest   = Mid(f, bangPos + 1)
+
+    ' Walk through 'rest', find every $LETTERS$ pattern and advance the letters
+    Dim result As String: result = ""
+    Dim i As Long: i = 1
+    Do While i <= Len(rest)
+        If Mid(rest, i, 1) = "$" Then
+            ' Check if next chars are uppercase letters (a column ref)
+            Dim j As Long: j = i + 1
+            Do While j <= Len(rest) And Mid(rest, j, 1) >= "A" And Mid(rest, j, 1) <= "Z"
+                j = j + 1
+            Loop
+            Dim colLen As Long: colLen = j - i - 1
+            If colLen > 0 And j <= Len(rest) And Mid(rest, j, 1) = "$" Then
+                ' This is a $COL$ pattern — advance the column letters
+                Dim colLetters As String: colLetters = Mid(rest, i + 1, colLen)
+                Dim num As Long: num = 0
+                Dim k As Long
+                For k = 1 To Len(colLetters)
+                    num = num * 26 + (Asc(Mid(colLetters, k, 1)) - Asc("A") + 1)
+                Next k
+                num = num + 1
+                Dim newCol As String: newCol = ""
+                Dim tmp As Long: tmp = num
+                Do While tmp > 0
+                    newCol = Chr(Asc("A") + (tmp - 1) Mod 26) & newCol
+                    tmp = (tmp - 1) \ 26
+                Loop
+                result = result & "$" & newCol
+                i = j  ' move i to the closing "$"
+            Else
+                ' Just a row anchor like $31 — keep as-is
+                result = result & Mid(rest, i, 1)
+                i = i + 1
+            End If
+        Else
+            result = result & Mid(rest, i, 1)
+            i = i + 1
+        End If
+    Loop
+
+    P2_AdvanceAllExtCols = prefix & result
+End Function
+
+
 
 '─── DIAGNOSTIC: run this manually to see exactly what cells are being read ────
 ' Run from VBA Immediate window or assign to a button:
