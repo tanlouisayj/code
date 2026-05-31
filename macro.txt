@@ -656,78 +656,136 @@ End Function
 '─── UPDATE DIRECT COST LINKS ──────────────────────────────────────────────────
 
 Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
+    ' Read the month indicator from C3 (e.g. "Apr") to find the correct column
+    ' Scan row 8 for a header matching the reporting month label
     Dim mo As Long: mo = yyyymm Mod 100
-    Dim currCol As Long: currCol = 5 + mo  ' F=6 for Jan, G=7 for Feb...
-    Dim prevCol As Long: prevCol = currCol - 1
+    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)   ' e.g. "Apr 26"
+    Dim prevMM  As Long:   prevMM  = P2_PrevYYYYMM(yyyymm)
+    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)    ' e.g. "Mar 26"
 
-    Dim prevMM As Long:   prevMM   = P2_PrevYYYYMM(yyyymm)
-    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
-    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
+    ' Short month name only (e.g. "Apr") for matching row 8 headers
+    Dim shortMo  As String: shortMo  = Left(currLbl, 3)   ' "Apr"
+    Dim shortPrev As String: shortPrev = Left(prevLbl, 3)  ' "Mar"
 
+    ' Find current month column by scanning row 8 for the month name
+    Dim currCol As Long: currCol = 0
+    Dim prevCol As Long: prevCol = 0
+    Dim c As Long
+    For c = 1 To 30
+        Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
+        If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then currCol = c
+        If InStr(1, hdr, shortPrev, vbTextCompare) > 0 Then prevCol = c
+    Next c
+
+    ' Fallback to column math if header scan fails
+    If currCol = 0 Then currCol = 5 + mo
+    If prevCol = 0 Then prevCol = currCol - 1
+
+    P2Log "Direct Cost Links", "INFO", "Updating rows 29-30 col " & currCol & _
+          " (" & shortMo & "). Copying from col " & prevCol & " (" & shortPrev & ")."
+
+    ' Only populate the current month column — do NOT touch any other column
     Dim r As Long
     For r = 29 To 30
         Dim prevF As String: prevF = plWs.Cells(r, prevCol).Formula
-        If prevF <> "" And prevF <> "0" Then
-            Dim newF As String: newF = prevF
-            ' Replace month label in filename (handles .xls and .xlsx)
-            newF = Replace(newF, " " & prevLbl & " ", " " & currLbl & " ")
-            newF = Replace(newF, "- " & prevLbl & " -", "- " & currLbl & " -")
+
+        ' Skip if previous column is empty
+        If prevF = "" Or prevF = "0" Then GoTo NextRow
+
+        ' Build new formula: replace prev month label with current month label
+        Dim newF As String: newF = prevF
+
+        ' Replace short month in filename e.g. "Mar 26" → "Apr 26"
+        newF = Replace(newF, " " & shortPrev & " ", " " & shortMo & " ")
+        ' Also handle full label replacement e.g. "Mar 26 - PF" → "Apr 26 - PF"
+        newF = Replace(newF, shortPrev & " 26", shortMo & " 26")
+
+        ' Only write to current month column — never overwrite other columns
+        If plWs.Cells(r, currCol).Formula = "" Or _
+           InStr(1, plWs.Cells(r, currCol).Formula, shortMo, vbTextCompare) = 0 Then
             plWs.Cells(r, currCol).Formula = newF
         End If
+
+NextRow:
     Next r
 End Sub
 
 '─── BUILD COMMENTARY ──────────────────────────────────────────────────────────
 
 Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM As Double) As String
+    ' Read numbers from P&L_PF dashboard (same workbook, separate tab)
+    Dim dashWs As Worksheet
+    On Error Resume Next
+    Set dashWs = plWs.Parent.Sheets(T_PL_DASH)
+    On Error GoTo 0
+    ' Fallback to plWs if dashboard not found
+    If dashWs Is Nothing Then Set dashWs = plWs
+
     Dim mo As Long: mo = yyyymm Mod 100
-    Dim currCol As Long: currCol = 5 + mo
-    Dim prevCol As Long: prevCol = currCol - 1
+    ' Find current month column by scanning row 8 for month name
+    Dim shortMo  As String: shortMo  = Left(P2_MonthLabel(yyyymm), 3)  ' "Apr"
+    Dim prevMM   As Long:   prevMM   = P2_PrevYYYYMM(yyyymm)
+    Dim shortPrev As String: shortPrev = Left(P2_MonthLabel(prevMM), 3) ' "Mar"
+
+    Dim currCol As Long: currCol = 0
+    Dim prevCol As Long: prevCol = 0
+    Dim c As Long
+    For c = 1 To 30
+        Dim hdr As String: hdr = Trim(CStr(dashWs.Cells(8, c).Value))
+        If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then currCol = c
+        If InStr(1, hdr, shortPrev, vbTextCompare) > 0 Then prevCol = c
+    Next c
+    If currCol = 0 Then currCol = 5 + mo
+    If prevCol = 0 Then prevCol = currCol - 1
 
     Dim mLbl  As String: mLbl  = P2_MonthLabel(yyyymm)
-    Dim prevMM As Long:  prevMM = P2_PrevYYYYMM(yyyymm)
     Dim pLbl  As String: pLbl  = P2_MonthLabel(prevMM)
 
-    ' Fixed column indices (from P&L_PF layout)
-    Const CN As Long = 14   ' Act YTD (col N)
-    Const CR As Long = 18   ' vs Bgt $ (col R)
-    Const CS As Long = 19   ' vs Bgt % (col S)
-    Const CW As Long = 23   ' Budget FY26 (col W)
+    ' Fixed YTD column indices — read from dashboard (confirmed by user: N25, R25, R23, R24)
+    Const CN As Long = 14   ' Col N = Act YTD
+    Const CR As Long = 18   ' Col R = vs Bgt $
+    Const CS As Long = 19   ' Col S = vs Bgt %
+    Const CW As Long = 23   ' Col W = Budget FY26
 
-    ' Read key values
-    Dim totIncYTD As Double: totIncYTD = P2V(plWs, 25, CN)
-    Dim totVsBgtD As Double: totVsBgtD = P2V(plWs, 25, CR)
-    Dim totVsBgtP As Double: totVsBgtP = P2V(plWs, 25, CS)
-    Dim niiYTD    As Double: niiYTD    = P2V(plWs, 23, CN)
-    Dim niiVsBgtD As Double: niiVsBgtD = P2V(plWs, 23, CR)
-    Dim nonNiiYTD As Double: nonNiiYTD = P2V(plWs, 24, CN)
-    Dim nonNiiVsD As Double: nonNiiVsD = P2V(plWs, 24, CR)
+    ' YTD P&L values from dashboard
+    Dim totIncYTD  As Double: totIncYTD  = P2V(dashWs, 25, CN)
+    Dim totVsBgtD  As Double: totVsBgtD  = P2V(dashWs, 25, CR)
+    Dim totVsBgtP  As Double: totVsBgtP  = P2V(dashWs, 25, CS)
+    Dim niiYTD     As Double: niiYTD     = P2V(dashWs, 23, CN)
+    Dim niiVsBgtD  As Double: niiVsBgtD  = P2V(dashWs, 23, CR)
+    Dim nonNiiYTD  As Double: nonNiiYTD  = P2V(dashWs, 24, CN)
+    Dim nonNiiVsD  As Double: nonNiiVsD  = P2V(dashWs, 24, CR)
 
-    Dim currNIM As Double: currNIM = P2V(plWs, 14, currCol)
-    Dim prevNIM As Double: prevNIM = P2V(plWs, 14, prevCol)
-    Dim bgtNIM  As Double: bgtNIM  = P2V(plWs, 14, CW)
-    Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 10000)
+    ' NIM — stored as % value e.g. 1.22 means 1.22% (NOT 0.0122)
+    Dim currNIM As Double: currNIM = P2V(dashWs, 14, currCol)
+    Dim prevNIM As Double: prevNIM = P2V(dashWs, 14, prevCol)
+    Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)
+    Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 100)  ' e.g. (1.13-1.45)*100 = -32
 
-    Dim currEOP As Double: currEOP = P2V(plWs, 11, currCol)
-    Dim prevEOP As Double: prevEOP = P2V(plWs, 11, prevCol)
+    ' EOP Assets ($bn)
+    Dim currEOP As Double: currEOP = P2V(dashWs, 11, currCol)
+    Dim prevEOP As Double: prevEOP = P2V(dashWs, 11, prevCol)
     Dim eopMoM  As Double: eopMoM  = currEOP - prevEOP
-    Dim eopVsD  As Double: eopVsD  = P2V(plWs, 11, CR)
-    Dim bgtEOP  As Double: bgtEOP  = P2V(plWs, 11, CW)
+    Dim eopVsD  As Double: eopVsD  = P2V(dashWs, 11, CR)
+    Dim bgtEOP  As Double: bgtEOP  = P2V(dashWs, 11, CW)
 
-    Dim currNonNii As Double: currNonNii = P2V(plWs, 24, currCol)
-    Dim prevNonNii As Double: prevNonNii = P2V(plWs, 24, prevCol)
+    ' Non-NII MoM
+    Dim currNonNii As Double: currNonNii = P2V(dashWs, 24, currCol)
+    Dim prevNonNii As Double: prevNonNii = P2V(dashWs, 24, prevCol)
     Dim nonNiiMoM  As Double: nonNiiMoM  = currNonNii - prevNonNii
 
-    Dim xsellYTD As Double: xsellYTD = P2V(plWs, 72, CN)
-    Dim cashYTD  As Double: cashYTD  = P2V(plWs, 76, CN)
-    Dim gfmYTD   As Double: gfmYTD   = P2V(plWs, 74, CN)
-    Dim tradeYTD As Double: tradeYTD = P2V(plWs, 75, CN)
-    Dim xsellVsD As Double: xsellVsD = P2V(plWs, 72, CR)
+    ' Cross-selling
+    Dim xsellYTD As Double: xsellYTD = P2V(dashWs, 72, CN)
+    Dim cashYTD  As Double: cashYTD  = P2V(dashWs, 76, CN)
+    Dim gfmYTD   As Double: gfmYTD   = P2V(dashWs, 74, CN)
+    Dim tradeYTD As Double: tradeYTD = P2V(dashWs, 75, CN)
 
-    Dim dirExpYTD As Double: dirExpYTD = P2V(plWs, 31, CN)
-    Dim dirExpVsD As Double: dirExpVsD = P2V(plWs, 31, CR)
+    ' Direct Expense
+    Dim dirExpYTD As Double: dirExpYTD = P2V(dashWs, 31, CN)
+    Dim dirExpVsD As Double: dirExpVsD = P2V(dashWs, 31, CR)
 
-    Dim hc As Long: hc = CLng(P2V(plWs, 68, currCol))
+    ' Headcount
+    Dim hc As Long: hc = CLng(P2V(dashWs, 69, currCol))
 
     ' Build commentary
     Dim t As String
@@ -744,15 +802,18 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     t = t & "NII of " & FM(Abs(niiYTD)) & " was $" & FM(Abs(niiVsBgtD)) & " " & _
         AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
         "($" & FB(Abs(currEOP)) & "bn vs $" & FB(Abs(bgtEOP)) & "bn budget) and compressed NIM " & _
-        "(" & Format(Abs(currNIM) * 100, "0.00") & "% vs " & Format(Abs(bgtNIM) * 100, "0.00") & "% budget)]." & _
+        "(" & Format(Abs(currNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
 
-    ' NIM
+    ' NIM — display as-is, NIM is already in % form (1.22 not 0.0122)
     t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
-        Format(Abs(prevNIM) * 100, "0.00") & "% in " & pLbl & " to " & _
-        Format(Abs(currNIM) * 100, "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
+        Format(Abs(prevNIM), "0.00") & "% in " & pLbl & " to " & _
+        Format(Abs(currNIM), "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
     If normNIM > 0 Then
-        t = t & "Normalised NIM maintains at " & Format(normNIM * 100, "0.00") & "%."
+        ' normNIM from NIM tab is a decimal (0.0126) — convert to display %
+        Dim normNIMDisplay As Double
+        normNIMDisplay = IIf(normNIM < 0.1, normNIM * 100, normNIM)  ' handle both formats
+        t = t & "Normalised NIM maintains at " & Format(normNIMDisplay, "0.00") & "%."
     End If
     t = t & vbNewLine & vbNewLine
 
@@ -784,6 +845,7 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
 
     P2_BuildCommentary = t
 End Function
+
 
 '─── UPDATE COMMENTARY TEXT BOX ────────────────────────────────────────────────
 
@@ -837,12 +899,14 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
 
     Application.ScreenUpdating = False
 
-    ' 1. Paste values + formats over pivot tabs
+    ' 1. Paste values + formats BEFORE breaking links (preserves calculated numbers)
+    ' Include P&L_PF tab so its linked values are frozen before links break
+    P2_PasteValues sentWb, T_PL_PF
+    P2_PasteValues sentWb, T_PL_DASH
     P2_PasteValues sentWb, T_PF_FEES
     P2_PasteValues sentWb, T_INC_CNTRY
     P2_PasteValues sentWb, T_XSELL
     P2_PasteValues sentWb, T_CUST_LIST
-    P2_PasteValues sentWb, T_PL_DASH
 
     ' 2. Close all groups
     Dim ws As Worksheet
@@ -866,20 +930,35 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
     Application.Calculate
     On Error GoTo 0
 
-    ' 4. Hide tabs
-    Dim toHide(1 To 11) As String
-    toHide(1) = T_PL_PF:      toHide(2) = T_PL_XCROSS:  toHide(3) = T_WORK_PF
-    toHide(4) = T_WORKING:    toHide(5) = T_TO_UPDATE:   toHide(6) = T_PF_FEES
-    toHide(7) = T_INC_CNTRY:  toHide(8) = T_XSELL:       toHide(9) = T_CUST_LIST
-    toHide(10) = T_WORK_PIVOTS: toHide(11) = T_NORM_NIM
+    ' 4. Hide only these tabs — PF Fees / Income tabs remain VISIBLE
+    '    (they were pasted as values so they show correctly without links)
+    Dim toHide(1 To 5) As String
+    toHide(1) = T_PL_PF        ' hidden — replaced by dashboard
+    toHide(2) = T_PL_XCROSS    ' hidden — working tab
+    toHide(3) = T_WORK_PF      ' hidden — working tab
+    toHide(4) = T_WORKING      ' hidden — working tab
+    toHide(5) = T_TO_UPDATE    ' hidden — working tab
 
     Dim t As Long
-    For t = 1 To 11
+    For t = 1 To 5
         On Error Resume Next
         Set ws = sentWb.Sheets(toHide(t))
         If Not ws Is Nothing Then ws.Visible = xlSheetHidden
+        Set ws = Nothing
         On Error GoTo 0
     Next t
+
+    ' Also hide Working+PF pivots and Normalised NIM if they exist
+    Dim extraHide As Variant
+    extraHide = Array(T_WORK_PIVOTS, T_NORM_NIM)
+    Dim h As Long
+    For h = 0 To UBound(extraHide)
+        On Error Resume Next
+        Set ws = sentWb.Sheets(extraHide(h))
+        If Not ws Is Nothing Then ws.Visible = xlSheetHidden
+        Set ws = Nothing
+        On Error GoTo 0
+    Next h
 
     ' 5. Activate P&L_PF dashboard as first visible tab
     On Error Resume Next
