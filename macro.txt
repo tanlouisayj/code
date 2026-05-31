@@ -380,6 +380,7 @@ PipelineError2:
     On Error Resume Next
     If Not pfWb Is Nothing Then pfWb.Close False
     If Not qsWb Is Nothing Then qsWb.Close False
+    Err.Clear
     On Error GoTo 0
     P2Log "PIPELINE ERROR", "ERROR", "Error " & en & ": " & ed
     Application.DisplayAlerts = True
@@ -747,7 +748,12 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
     ' Copy working file
     pfWb.SaveCopyAs sentPath
 
-    Dim sentWb As Workbook: Set sentWb = Workbooks.Open(sentPath)
+    Dim sentWb As Workbook
+    On Error Resume Next
+    Set sentWb = Workbooks.Open(sentPath)
+    On Error GoTo 0
+    If sentWb Is Nothing Then Exit Sub
+
     Application.ScreenUpdating = False
 
     ' 1. Paste values + formats over pivot tabs
@@ -801,8 +807,10 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
 
     ' 6. Save as xlsx (strips macros)
     Application.DisplayAlerts = False
+    On Error Resume Next
     sentWb.SaveAs sentPath, xlOpenXMLWorkbook
     sentWb.Close
+    On Error GoTo 0
     Application.DisplayAlerts = True
 End Sub
 
