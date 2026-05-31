@@ -515,7 +515,6 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
     ' Search 345-360 to allow small drift if pivot grows
     Dim nimPctRow As Long: nimPctRow = 0
     Dim nimPctCol As Long: nimPctCol = colNII
-    Dim r As Long
 
     ' Method 1: find by yellow fill colour
     For r = 345 To 360
