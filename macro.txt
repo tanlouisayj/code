@@ -1,8 +1,22 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v6)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v7)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
+' CHANGES IN v7 (vs v6):
+'   - P2_UpdateDCLinks (Step 3):
+'       * Rewrote column-advance logic: instead of text-substituting the prev
+'         month label in the formula string, now scans row 8 on P&L_PF for the
+'         current reporting month header to find currCol, derives prevCol = currCol-1,
+'         copies prevCol formula to currCol using FillRight-equivalent column-letter
+'         increment. Handles Z→AA and any two-letter column transitions correctly.
+'       * P2_IncrementColInFormula helper added: finds every column letter
+'         reference in an external-link formula and advances it by +1, so
+'         [Book.xlsm]Sheet!$Z$5 becomes [Book.xlsm]Sheet!$AA$5 etc.
+'       * Month-label text in the formula is also updated (Mar 26 → Apr 26).
+'   - P2_BuildCommentary:
+'       * bracketNIM confirmed col N (14) row 14 — YTD NIM for compressed NIM bracket.
+'       * currNIM col I (9) row 14 — current month NIM for MoM sentence (unchanged).
 ' CHANGES IN v6 (vs v5):
 '   - P2_CreateSentFile:
 '       * Step 7 (new): ClearComments on ALL sheets before SaveAs — ensures no
@@ -619,48 +633,148 @@ ErrH: P2_GetNormNIM = 0
 End Function
 
 '─── UPDATE DIRECT COST LINKS ──────────────────────────────────────────────────
+' v7 LOGIC:
+'   1. Scan row 8 on P&L_PF for the current reporting month (e.g. "Apr") → currCol
+'   2. prevCol = currCol - 1  (the column immediately to the left)
+'   3. Copy prevCol formula to currCol, advancing every column-letter reference
+'      inside the formula by +1  (Z→AA, AA→AB, etc.) using P2_IncrementColInFormula.
+'   4. Also replace the prev month label text (e.g. "Mar 26") with curr month
+'      label (e.g. "Apr 26") so any text references in the formula are updated.
+'   This mirrors what Ctrl+R does — Excel shifts relative column references
+'   right by one column when filling right.
 
 Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Dim mo As Long: mo = yyyymm Mod 100
-    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
-    Dim prevMM  As Long:   prevMM  = P2_PrevYYYYMM(yyyymm)
-    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
+    Dim currLbl  As String: currLbl  = P2_MonthLabel(yyyymm)
+    Dim prevMM   As Long:   prevMM   = P2_PrevYYYYMM(yyyymm)
+    Dim prevLbl  As String: prevLbl  = P2_MonthLabel(prevMM)
+    Dim shortMo  As String: shortMo  = Left(currLbl, 3)   ' e.g. "Apr"
+    Dim shortPrev As String: shortPrev = Left(prevLbl, 3) ' e.g. "Mar"
 
-    Dim shortMo  As String: shortMo  = Left(currLbl, 3)
-    Dim shortPrev As String: shortPrev = Left(prevLbl, 3)
-
+    ' ── Step 1: Find currCol by scanning row 8 for current month header ───────
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
     Dim c As Long
-    For c = 1 To 30
+    For c = 1 To 50
         Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
         If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then currCol = c
-        If InStr(1, hdr, shortPrev, vbTextCompare) > 0 Then prevCol = c
     Next c
 
+    ' Fallback if header scan fails
     If currCol = 0 Then currCol = 5 + mo
-    If prevCol = 0 Then prevCol = currCol - 1
+    prevCol = currCol - 1   ' always one column to the left — mirrors Ctrl+R source
 
-    P2Log "Direct Cost Links", "INFO", "Updating rows 29-30 col " & currCol & _
-          " (" & shortMo & "). Copying from col " & prevCol & " (" & shortPrev & ")."
+    P2Log "Direct Cost Links", "INFO", _
+          "Row 8 scan: currCol=" & currCol & " (" & shortMo & "), prevCol=" & prevCol & " (" & shortPrev & ")."
 
+    ' ── Step 2: For rows 29 and 30, copy prevCol formula → currCol with col+1 ─
     Dim r As Long
     For r = 29 To 30
         Dim prevF As String: prevF = plWs.Cells(r, prevCol).Formula
         If prevF = "" Or prevF = "0" Then GoTo NextRow
 
-        Dim newF As String: newF = prevF
-        newF = Replace(newF, " " & shortPrev & " ", " " & shortMo & " ")
-        newF = Replace(newF, shortPrev & " 26", shortMo & " 26")
+        ' Advance every column-letter reference in the formula by +1 (Z→AA etc.)
+        Dim newF As String
+        newF = P2_IncrementColInFormula(prevF)
 
+        ' Also update month-label text in the formula (e.g. "Mar 26" → "Apr 26")
+        newF = Replace(newF, shortPrev & " 26", shortMo & " 26")
+        newF = Replace(newF, " " & shortPrev & " ", " " & shortMo & " ")
+
+        ' Write to currCol only if it doesn't already reference the current month
         If plWs.Cells(r, currCol).Formula = "" Or _
            InStr(1, plWs.Cells(r, currCol).Formula, shortMo, vbTextCompare) = 0 Then
             plWs.Cells(r, currCol).Formula = newF
+            P2Log "Direct Cost Links", "INFO", _
+                  "Row " & r & " col " & currCol & " written. Formula: " & Left(newF, 80)
         End If
 
 NextRow:
     Next r
 End Sub
+
+'─── INCREMENT COLUMN LETTERS IN A FORMULA BY +1 ──────────────────────────────
+' Advances every $COL$ or $COL reference inside a formula string by one column.
+' Handles single-letter (A-Z) and double-letter (AA-XFD) column references.
+' Examples:
+'   $Z$14   → $AA$14
+'   $AA$14  → $AB$14
+'   $AZ$14  → $BA$14
+' Only advances references preceded by $ (absolute column refs in external links
+' and standard Excel formulas). Relative refs without $ are left unchanged
+' since Ctrl+R in Excel only shifts relative refs — but external link formulas
+' always use absolute $COL notation, which is what rows 29-30 contain.
+
+Private Function P2_IncrementColInFormula(formula As String) As String
+    Dim result As String: result = formula
+    Dim i As Long: i = 1
+    Dim out As String: out = ""
+
+    Do While i <= Len(result)
+        Dim ch As String: ch = Mid(result, i, 1)
+
+        ' Look for $ followed by one or two uppercase letters followed by $ or digit
+        If ch = "$" Then
+            ' Peek ahead to see if this is a column reference: $[A-Z]{1,2}[$0-9]
+            Dim j As Long: j = i + 1
+            Dim colStr As String: colStr = ""
+            Do While j <= Len(result)
+                Dim nc As String: nc = Mid(result, j, 1)
+                If nc >= "A" And nc <= "Z" Then
+                    colStr = colStr & nc
+                    j = j + 1
+                Else
+                    Exit Do
+                End If
+            Loop
+            ' Valid column ref: 1 or 2 letters followed by $ or digit
+            If Len(colStr) >= 1 And Len(colStr) <= 3 Then
+                Dim nextCh As String
+                nextCh = ""
+                If j <= Len(result) Then nextCh = Mid(result, j, 1)
+                If nextCh = "$" Or (nextCh >= "0" And nextCh <= "9") Then
+                    ' Increment the column
+                    Dim newCol As String: newCol = P2_NextColLetter(colStr)
+                    out = out & "$" & newCol
+                    i = j  ' skip past the original col letters
+                    GoTo NextChar
+                End If
+            End If
+            ' Not a column ref — output $ as-is
+            out = out & ch
+            i = i + 1
+        Else
+            out = out & ch
+            i = i + 1
+        End If
+NextChar:
+    Loop
+
+    P2_IncrementColInFormula = out
+End Function
+
+'─── ADVANCE A COLUMN LETTER STRING BY ONE ────────────────────────────────────
+' Converts column letter string to number, adds 1, converts back.
+' e.g. "Z" → "AA", "AA" → "AB", "AZ" → "BA"
+
+Private Function P2_NextColLetter(colLetters As String) As String
+    ' Convert letters to column number
+    Dim n As Long: n = 0
+    Dim k As Long
+    For k = 1 To Len(colLetters)
+        n = n * 26 + (Asc(Mid(colLetters, k, 1)) - Asc("A") + 1)
+    Next k
+    ' Increment
+    n = n + 1
+    ' Convert back to letters
+    Dim result As String: result = ""
+    Do While n > 0
+        Dim rem As Long: rem = (n - 1) Mod 26
+        result = Chr(Asc("A") + rem) & result
+        n = (n - 1) \ 26
+    Loop
+    P2_NextColLetter = result
+End Function
 
 '─── BUILD COMMENTARY ──────────────────────────────────────────────────────────
 ' Fixed column sources (v4):
@@ -720,9 +834,11 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim nonNiiYTD As Double: nonNiiYTD = P2V(dashWs, 24, CN)
     Dim nonNiiVsD As Double: nonNiiVsD = P2V(dashWs, 24, CR)
 
-    ' ── NIM: current month fixed to col I (9); prev month uses dynamic prevCol
-    Dim currNIM    As Double: currNIM    = P2V(dashWs, 14, CI)       ' FIX v5: col I row 14 — used for MoM sentence
-    Dim bracketNIM As Double: bracketNIM = P2V(dashWs, 14, CN)       ' col N row 14 — used only in NII bracket "compressed NIM x% vs y%"
+    ' ── NIM: bracketNIM = YTD NIM from col N (14) row 14 — for compressed NIM bracket in NII section
+    '         currNIM   = current month NIM from col I (9)  row 14 — for NIM MoM sentence only
+    '         prevNIM   = previous month NIM from dynamic prevCol row 14 — for MoM bps calc
+    Dim currNIM    As Double: currNIM    = P2V(dashWs, 14, CI)       ' col I row 14 — MoM sentence only
+    Dim bracketNIM As Double: bracketNIM = P2V(dashWs, 14, CN)       ' col N row 14 — YTD NIM for compressed NIM bracket (NOT col I)
     Dim prevNIM    As Double: prevNIM    = P2V(dashWs, 14, prevCol)  ' MoM prev — dynamic
     Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)
     Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 100)
