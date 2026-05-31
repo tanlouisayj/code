@@ -1,552 +1,952 @@
 '=============================================================================
-' PF CASELIST AUTOMATION - VBA VERSION
-' Save this in a macro-enabled workbook (.xlsm) called PF_Automation.xlsm
-' Keep the workbook open in the background — it watches the folder every 60s
+' PF FINANCIALS AUTOMATION - PART 2 MODULE
+' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
+' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
 ' HOW TO SET UP:
-'   1. Open Excel, create new workbook, Save As > PF_Automation.xlsm
-'   2. Press Alt+F11 to open VBA Editor
-'   3. In left panel, double-click "ThisWorkbook"
-'   4. Paste the Workbook_Open sub at the bottom of this file there
-'   5. Insert > Module, paste everything else into that module
-'   6. Close VBA Editor, save, reopen file — automation starts automatically
+'   1. Paste this entire file into Module2
+'   2. Run AddPart2ToControlPanel once (Alt+F8 → AddPart2ToControlPanel)
+'   3. Fill in the new yellow cells on Sheet1 (rows 36-43)
+'   4. Use the green "Run PF Financials" button
+'=============================================================================
+' STEPS THIS MACRO PERFORMS:
+'   1. Rename Project_Finance {prev} (working).xlsm → {curr month}
+'   2. Open QS SQL download → refresh Working+Working PF pivots
+'   3. Refresh Normalised NIM pivot → update SUMIF formula columns for LCINs
+'   4. Get Normalised NIM % value
+'   5. Open working file → update Direct Cost links rows 29-30
+'   6. Refresh all workbook links
+'   7. Refresh PF Fees / Income by Country / Total Inc X-selling / PF Cust List pivots
+'   8. Build commentary from P&L cells → update text box in P&L_PF dashboard
+'   9. Save working file
+'  10. Create sent file: break links, paste values, close groups, hide tabs, save .xlsx
+'  11. Capture B6:X25 of dashboard as PNG → draft email with image attached
 '=============================================================================
 
 Option Explicit
 
-'─── CONFIGURATION ────────────────────────────────────────────────────────────
-Const WATCH_FOLDER  As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
-Const QS_FILE       As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\QS SQL download.xlsx"
-Const OUTPUT_FOLDER As String = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\Automation\"
+'─── PART 2 SETTINGS CELL ADDRESSES (rows 36-43 on Sheet1) ────────────────────
+Const P2_FOLDER_CELL    As String = "B36"  ' working + sent file folder
+Const P2_QS_FILE_CELL   As String = "B37"  ' QS SQL download.xlsx full path
+Const P2_EMAIL_TO_CELL  As String = "B38"
+Const P2_EMAIL_CC_CELL  As String = "B39"
+Const P2_GREETING_CELL  As String = "B40"
+Const P2_YOUR_NAME_CELL As String = "B41"
+Const P2_NIM_RANGE_CELL As String = "B42"  ' e.g. "298:320"
+Const P2_NIM_DATA_CELL  As String = "B43"  ' e.g. "35:291" SUMIF lookup range
 
-Const EMAIL_TO      As String = "stevelim@dbs.com"
-Const EMAIL_CC      As String = "kaiyuanwong@dbs.com; ganeshp@dbs.com"
-Const EMAIL_NAME    As String = "Louisa"
+'─── TAB NAME CONSTANTS ────────────────────────────────────────────────────────
+Const T_WORK_PIVOTS  As String = "Working + Working PF pivots"
+Const T_NORM_NIM     As String = "Normalised NIM"
+Const T_PL_DASH      As String = "P&L_PF dashboard"
+Const T_PL_PF        As String = "P&L_PF"
+Const T_PL_XCROSS    As String = "P&L with X-cross $"
+Const T_PF_FEES      As String = "PF Fees"
+Const T_INC_CNTRY    As String = "PF Income by Country"
+Const T_XSELL        As String = "Total Inc Cust with X-selling"
+Const T_CUST_LIST    As String = "PF Cust List Income"
+Const T_WORK_PF      As String = "Working PF"
+Const T_WORKING      As String = "Working"
+Const T_TO_UPDATE    As String = "to update"
 
-' Column mapping: 202601 = col Q (17), 202602 = R (18), etc.
-Const BASE_MONTH    As Long = 202601
-Const BASE_COL_IDX  As Long = 17        ' Q = 17
+'─── SETTINGS READERS ──────────────────────────────────────────────────────────
 
-' Column positions in QS data (1-indexed)
-Const COL_AA As Long = 27
-Const COL_AE As Long = 31
-Const COL_AF As Long = 32
-Const COL_Q  As Long = 17
-Const COL_F  As Long = 6
-Const COL_E  As Long = 5
-Const COL_N  As Long = 14
+Private Function P2S(cell As String) As String
+    P2S = Trim(CStr(ThisWorkbook.Sheets("Sheet1").Range(cell).Value))
+End Function
 
-Const QS_DATA_TAB   As String = "QS data"
-Const CHECK_DUP_TAB As String = "Check duplicate EGs"
-Const PIVOT_TAB     As String = "Caselist Pivots"
+Private Function P2_Folder() As String
+    Dim p As String: p = P2S(P2_FOLDER_CELL)
+    If Right(p, 1) <> "\" Then p = p & "\"
+    P2_Folder = p
+End Function
 
-' Pivot start cells and their output tab names
-' Format: "StartCell|TabName"
-Const PIVOT_1 As String = "A1|EOP Asset Balance"
-Const PIVOT_2 As String = "S1|Total Income"
-Const PIVOT_3 As String = "AP1|NII"
-Const PIVOT_4 As String = "BH1|Fee"
-Const PIVOT_5 As String = "BZ1|Other income"
+Private Function P2_QSFile() As String:     P2_QSFile    = P2S(P2_QS_FILE_CELL):   End Function
+Private Function P2_EmailTo() As String:    P2_EmailTo   = P2S(P2_EMAIL_TO_CELL):  End Function
+Private Function P2_EmailCC() As String:    P2_EmailCC   = P2S(P2_EMAIL_CC_CELL):  End Function
+Private Function P2_Greeting() As String:   P2_Greeting  = P2S(P2_GREETING_CELL):  End Function
+Private Function P2_YourName() As String:   P2_YourName  = P2S(P2_YOUR_NAME_CELL): End Function
 
-'─── FOLDER WATCHER ───────────────────────────────────────────────────────────
-' Called every 60 seconds by the timer set in Workbook_Open
+Private Function P2_NimStart() As Long
+    Dim s As String: s = P2S(P2_NIM_RANGE_CELL)
+    Dim p() As String: p = Split(s, ":")
+    If UBound(p) >= 0 And IsNumeric(p(0)) Then P2_NimStart = CLng(p(0)) Else P2_NimStart = 298
+End Function
 
-Public Sub WatchFolder()
-    Dim fso     As Object
-    Dim folder  As Object
-    Dim file    As Object
-    Dim fname   As String
-    Dim yyyymm  As Long
+Private Function P2_NimEnd() As Long
+    Dim s As String: s = P2S(P2_NIM_RANGE_CELL)
+    Dim p() As String: p = Split(s, ":")
+    If UBound(p) >= 1 And IsNumeric(p(1)) Then P2_NimEnd = CLng(p(1)) Else P2_NimEnd = 320
+End Function
 
-    Set fso    = CreateObject("Scripting.FileSystemObject")
-    Set folder = fso.GetFolder(WATCH_FOLDER)
+Private Function P2_DataStart() As Long
+    Dim s As String: s = P2S(P2_NIM_DATA_CELL)
+    Dim p() As String: p = Split(s, ":")
+    If UBound(p) >= 0 And IsNumeric(p(0)) Then P2_DataStart = CLng(p(0)) Else P2_DataStart = 35
+End Function
 
+Private Function P2_DataEnd() As Long
+    Dim s As String: s = P2S(P2_NIM_DATA_CELL)
+    Dim p() As String: p = Split(s, ":")
+    If UBound(p) >= 1 And IsNumeric(p(1)) Then P2_DataEnd = CLng(p(1)) Else P2_DataEnd = 291
+End Function
+
+'─── ADD PART 2 TO CONTROL PANEL (run once) ────────────────────────────────────
+
+Public Sub AddPart2ToControlPanel()
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Sheet1")
+
+    ' Clear rows 34-50 to rebuild cleanly
+    ws.Range("A34:G50").Clear
+
+    ' Header
+    With ws.Range("A34:G34")
+        .Merge
+        .Value = "PART 2  —  PF FINANCIALS MONTHLY REPORT"
+        .Font.Size = 12: .Font.Bold = True
+        .Interior.Color = RGB(0, 80, 0)
+        .Font.Color = RGB(255, 255, 255)
+        .RowHeight = 26
+        .HorizontalAlignment = xlCenter
+        .VerticalAlignment = xlCenter
+    End With
+
+    ' Labels and defaults
+    ws.Range("A35").Value = "PART 2 FILE & EMAIL SETTINGS"
+    ws.Range("A35").Font.Bold = True
+    ws.Range("A35").Interior.Color = RGB(210, 230, 210)
+
+    Dim labels(1 To 8) As String, defaults(1 To 8) As String
+    labels(1) = "Working & Sent File Folder"
+    defaults(1) = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\"
+    labels(2) = "QS SQL download.xlsx  (full path — confirm each month)"
+    defaults(2) = "\\w01g1bnkfps02y\CIB_BUC_VOL1\CIB-BUC\Project Finance\2026\QS SQL download.xlsx"
+    labels(3) = "To  (separate multiple with ;)"
+    defaults(3) = ""
+    labels(4) = "CC  (separate multiple with ;)"
+    defaults(4) = ""
+    labels(5) = "Greeting Name  (Hi [name],)"
+    defaults(5) = "All"
+    labels(6) = "Your Name  (sign-off)"
+    defaults(6) = "Louisa"
+    labels(7) = "Normalised NIM LCIN rows  (e.g. 298:320)"
+    defaults(7) = "298:320"
+    labels(8) = "Normalised NIM SUMIF data rows  (e.g. 35:291)"
+    defaults(8) = "35:291"
+
+    Dim r As Long
+    For r = 1 To 8
+        ws.Range("A" & (35 + r)).Value = labels(r)
+        ws.Range("B" & (35 + r)).Value = defaults(r)
+        ws.Range("A" & (35 + r)).Font.Color = RGB(64, 64, 64)
+    Next r
+
+    ' Yellow editable
+    ws.Range("B36:B43").Interior.Color = RGB(255, 255, 180)
+
+    ' Column widths
+    ws.Columns("A").ColumnWidth = 45
+    ws.Columns("B").ColumnWidth = 75
+
+    ' Button
+    Dim btn As Shape
+    Set btn = ws.Shapes.AddShape(msoShapeRoundedRectangle, _
+        ws.Range("B45").Left, ws.Range("B45").Top, 200, 38)
+    With btn
+        .TextFrame.Characters.Text = "Run PF Financials"
+        .TextFrame.Characters.Font.Size = 11
+        .TextFrame.Characters.Font.Bold = True
+        .TextFrame.Characters.Font.Color = RGB(255, 255, 255)
+        .Fill.ForeColor.RGB = RGB(0, 128, 0)
+        .Line.Visible = msoFalse
+        .OnAction = "RunPFFinancialsManual"
+    End With
+
+    ws.Range("A47:G47").Merge
+    ws.Range("A47").Value = "TIP: QS SQL download.xlsx must be closed before running. " & _
+                             "Confirm its path in B37 each month if it moves."
+    ws.Range("A47").Font.Color = RGB(192, 0, 0)
+    ws.Range("A47").Font.Italic = True
+
+    MsgBox "Part 2 section added to Sheet1! Fill in yellow cells B36:B43 then click Run PF Financials.", _
+           vbInformation, "Part 2 Setup"
+End Sub
+
+'─── BUTTON ENTRY POINT ────────────────────────────────────────────────────────
+
+Public Sub RunPFFinancialsManual()
+    If P2_Folder() = "" Or P2_QSFile() = "" Then
+        MsgBox "Fill in Part 2 settings on Sheet1 first (rows 36-43).", vbCritical: Exit Sub
+    End If
+
+    ' Find working file in folder
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim folder As Object
+    On Error Resume Next: Set folder = fso.GetFolder(P2_Folder()): On Error GoTo 0
+
+    If folder Is Nothing Then
+        MsgBox "Cannot access folder:" & vbNewLine & P2_Folder(), vbCritical: Exit Sub
+    End If
+
+    Dim workingPath As String: workingPath = ""
+    Dim file As Object
     For Each file In folder.Files
-        fname = file.Name
-        ' Match files named exactly YYYYMM.xlsx
-        If LCase(Right(fname, 5)) = ".xlsx" And Len(fname) = 11 Then
-            Dim period As String
-            period = Left(fname, 6)
-            If IsNumeric(period) Then
-                yyyymm = CLng(period)
-                ' Check it looks like a valid YYYYMM (year 2020+, month 1-12)
-                If yyyymm \ 100 >= 2020 And (yyyymm Mod 100) >= 1 And (yyyymm Mod 100) <= 12 Then
-                    ' Check not already processed (rename to .done when done)
-                    Call RunPipeline(file.Path, yyyymm)
-                    ' Rename to .done so we don't re-process
-                    Name file.Path As WATCH_FOLDER & period & ".done"
-                End If
-            End If
+        If InStr(1, LCase(file.Name), "project_finance") > 0 And _
+           InStr(1, LCase(file.Name), "(working)") > 0 Then
+            workingPath = file.Path: Exit For
         End If
     Next file
 
-    ' Re-arm the timer
-    Application.OnTime Now + TimeValue("00:01:00"), "WatchFolder"
-End Sub
-
-'─── MAIN PIPELINE ────────────────────────────────────────────────────────────
-
-Public Sub RunPipeline(srcPath As String, yyyymm As Long)
-    Dim qsWb    As Workbook
-    Dim qsWs    As Worksheet
-    Dim srcWb   As Workbook
-    Dim srcWs   As Worksheet
-
-    Application.ScreenUpdating = False
-    Application.DisplayAlerts  = False
-
-    ' Step 1: Open source file and run checks
-    Set srcWb = Workbooks.Open(srcPath, ReadOnly:=True)
-    Set srcWs = srcWb.Sheets(1)
-
-    Dim errMsg As String
-    errMsg = RunChecks(srcWs, yyyymm)
-    If errMsg <> "" Then
-        MsgBox "Data checks failed for " & yyyymm & ":" & vbNewLine & errMsg, vbCritical
-        srcWb.Close False
-        Application.ScreenUpdating = True
-        Application.DisplayAlerts  = True
+    If workingPath = "" Then
+        MsgBox "No 'Project_Finance * (working).*' file found in:" & vbNewLine & P2_Folder(), vbCritical
         Exit Sub
     End If
 
-    ' Step 2: Open QS SQL download.xlsx
-    Set qsWb = Workbooks.Open(QS_FILE)
-    Set qsWs = qsWb.Sheets(QS_DATA_TAB)
+    ' Extract current period from filename, compute new period
+    Dim oldPeriod As Long: oldPeriod = P2_ExtractPeriod(fso.GetFileName(workingPath))
+    Dim newPeriod As Long: newPeriod = P2_NextYYYYMM(oldPeriod)
 
-    ' Step 3: Delete existing rows for this YYYYMM
-    Call DeleteExistingRows(qsWs, yyyymm)
+    If newPeriod = 0 Then
+        MsgBox "Could not determine period from filename: " & fso.GetFileName(workingPath), vbCritical
+        Exit Sub
+    End If
 
-    ' Step 4: Copy filtered rows from source (cols A-AD only)
-    Call CopyFilteredRows(srcWs, qsWs, yyyymm)
-    srcWb.Close False
+    ' Check QS SQL download is closed
+    Dim wb As Workbook
+    For Each wb In Workbooks
+        If InStr(1, LCase(wb.FullName), LCase("QS SQL download")) > 0 Then
+            MsgBox "Please close 'QS SQL download.xlsx' before running.", vbCritical: Exit Sub
+        End If
+    Next wb
 
-    ' Step 5: Write AE/AF formulas
-    Call WriteFormulas(qsWs, yyyymm)
+    ' Confirm
+    If MsgBox("Current working file:  " & fso.GetFileName(workingPath) & vbNewLine & vbNewLine & _
+              "Will rename to:  Project_Finance " & P2_MonthLabel(newPeriod) & " (working).xlsm" & vbNewLine & _
+              "Generating PF Financials for:  " & P2_MonthLabel(newPeriod) & vbNewLine & vbNewLine & _
+              "To:  " & P2_EmailTo() & vbNewLine & _
+              "CC:  " & P2_EmailCC() & vbNewLine & vbNewLine & _
+              "Proceed?", vbYesNo + vbQuestion, "PF Financials Part 2") = vbNo Then Exit Sub
 
-    ' Step 6: Refresh all pivots
-    qsWb.RefreshAll
-    Application.Wait Now + TimeValue("00:00:05")  ' Wait 5s for refresh
+    Call RunPFFinancials(workingPath, newPeriod)
+End Sub
 
-    ' Step 7: Copy pivots to output file
-    Dim outPath As String
-    outPath = OUTPUT_FOLDER & "PF " & MonthLabel(yyyymm) & _
-              " Caselist - EOP Asset Balance and Total Income by Country.xlsx"
+'─── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
-    Dim niiData() As Variant
-    Dim feeData()  As Variant
-    Call CopyPivotsToOutput(qsWb, outPath, niiData, feeData)
+Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
+    Application.DisplayAlerts = False
+    Application.ScreenUpdating = False
 
-    ' Step 8: Save QS file
+    Dim pfWb  As Workbook
+    Dim qsWb  As Workbook
+
+    On Error GoTo PipelineError2
+
+    '── Step 1: Rename working file ────────────────────────────────────────────
+    P2Log "Step 1/9 - Rename File", "RUNNING", "Renaming to Project_Finance " & P2_MonthLabel(yyyymm) & " (working)..."
+    Dim fso As Object: Set fso = CreateObject("Scripting.FileSystemObject")
+    Dim newFileName As String
+    newFileName = "Project_Finance " & P2_MonthLabel(yyyymm) & " (working).xlsm"
+    Dim newPath As String: newPath = P2_Folder() & newFileName
+
+    If Dir(newPath) = "" Then fso.MoveFile workingPath, newPath
+    Application.ScreenUpdating = False
+    Set pfWb = Workbooks.Open(newPath)
+    P2Log "Step 1/9 - Rename File", "OK", "Opened: " & newFileName
+
+    '── Step 2: Open QS SQL download → refresh pivots + Normalised NIM ─────────
+    P2Log "Step 2/9 - Refresh QS Pivots", "RUNNING", "Opening: " & P2_QSFile()
+    Application.ScreenUpdating = False
+    Set qsWb = Workbooks.Open(P2_QSFile())
+
+    ' Refresh Working + Working PF pivots
+    P2_RefreshTabPivots qsWb, T_WORK_PIVOTS
+
+    ' Refresh Normalised NIM pivot and update SUMIF formulas
+    P2_RefreshNIMTab qsWb, yyyymm
+
+    ' Read normalised NIM value
+    Dim normNIM As Double: normNIM = P2_GetNormNIM(qsWb, yyyymm)
+    P2Log "Step 2/9 - Refresh QS Pivots", "OK", _
+          "QS pivots refreshed. Normalised NIM = " & Format(normNIM * 100, "0.00") & "%"
+
     qsWb.Save
     qsWb.Close
 
-    ' Step 9: MoM analysis
-    Dim niiText As String
-    Dim feeText As String
-    niiText = GetMomContributors(niiData, "NII", yyyymm)
-    feeText = GetMomContributors(feeData, "Fee", yyyymm)
+    '── Step 3: Update Direct Cost links rows 29-30 ────────────────────────────
+    P2Log "Step 3/9 - Direct Cost Links", "RUNNING", "Updating P&L_PF rows 29-30..."
+    Application.ScreenUpdating = False
+    Dim plWs As Worksheet: Set plWs = pfWb.Sheets(T_PL_PF)
+    P2_UpdateDCLinks plWs, yyyymm
+    P2Log "Step 3/9 - Direct Cost Links", "OK", "Done."
 
-    ' Step 10: Send email
-    Call SendEmail(outPath, yyyymm, niiText, feeText)
+    '── Step 4: Refresh all workbook links ─────────────────────────────────────
+    P2Log "Step 4/9 - Refresh Links", "RUNNING", "Refreshing workbook links..."
+    Application.ScreenUpdating = False
+    On Error Resume Next
+    pfWb.UpdateLink Name:=pfWb.LinkSources, Type:=xlExcelLinks
+    On Error GoTo PipelineError2
+    Application.Wait Now + TimeValue("00:00:04")
+    Application.Calculate
+    P2Log "Step 4/9 - Refresh Links", "OK", "Links refreshed."
 
+    '── Step 5: Refresh reporting tab pivots ───────────────────────────────────
+    P2Log "Step 5/9 - Refresh Report Pivots", "RUNNING", "Refreshing PF Fees, Income by Country, etc..."
+    Application.ScreenUpdating = False
+    P2_RefreshTabPivots pfWb, T_PF_FEES
+    P2_RefreshTabPivots pfWb, T_INC_CNTRY
+    P2_RefreshTabPivots pfWb, T_XSELL
+    P2_RefreshTabPivots pfWb, T_CUST_LIST
+    Application.Calculate
+    Application.Wait Now + TimeValue("00:00:03")
+    P2Log "Step 5/9 - Refresh Report Pivots", "OK", "Done."
+
+    '── Step 6: Build and update commentary text box ───────────────────────────
+    P2Log "Step 6/9 - Update Commentary", "RUNNING", "Building commentary from P&L cells..."
+    Application.ScreenUpdating = False
+    Dim commentary As String
+    commentary = P2_BuildCommentary(plWs, yyyymm, normNIM)
+    Dim dashWs As Worksheet: Set dashWs = pfWb.Sheets(T_PL_DASH)
+    P2_UpdateTextBox dashWs, commentary
+    P2Log "Step 6/9 - Update Commentary", "OK", "Commentary updated. Review [UPDATE] placeholders."
+
+    '── Step 7: Save working file ──────────────────────────────────────────────
+    P2Log "Step 7/9 - Save Working", "RUNNING", "Saving " & newFileName & "..."
+    Application.ScreenUpdating = False
+    pfWb.Save
+    P2Log "Step 7/9 - Save Working", "OK", "Saved."
+
+    '── Step 8: Create sent file ───────────────────────────────────────────────
+    Dim sentFileName As String
+    sentFileName = "Project_Finance " & P2_MonthLabel(yyyymm) & " (sent).xlsx"
+    Dim sentPath As String: sentPath = P2_Folder() & sentFileName
+    P2Log "Step 8/9 - Create Sent File", "RUNNING", "Creating: " & sentFileName
+    Application.ScreenUpdating = False
+    P2_CreateSentFile pfWb, yyyymm, sentPath
+    P2Log "Step 8/9 - Create Sent File", "OK", "Sent file created."
+
+    '── Step 9: Screenshot + draft email ───────────────────────────────────────
+    P2Log "Step 9/9 - Email Draft", "RUNNING", "Capturing dashboard and drafting email..."
     Application.ScreenUpdating = True
-    Application.DisplayAlerts  = True
 
-    MsgBox "Pipeline complete for " & yyyymm & "!" & vbNewLine & "Email sent to " & EMAIL_TO, vbInformation
+    Dim imgPath As String
+    imgPath = Environ("TEMP") & "\PF_Dashboard_" & yyyymm & ".png"
+    Dim imgOK As Boolean: imgOK = False
+
+    ' Open sent file to capture screenshot
+    Dim sentWb As Workbook: Set sentWb = Workbooks.Open(sentPath)
+    On Error Resume Next
+    Dim sentDash As Worksheet: Set sentDash = sentWb.Sheets(T_PL_DASH)
+    On Error GoTo PipelineError2
+    If Not sentDash Is Nothing Then
+        imgOK = P2_CaptureImage(sentDash, "B6:X25", imgPath)
+    End If
+    sentWb.Close False
+
+    P2_SendEmail sentPath, imgPath, imgOK, commentary, yyyymm
+    P2Log "Step 9/9 - Email Draft", "OK", "Draft email opened. Review [UPDATE] items and send."
+    P2Log "ALL COMPLETE", "OK", "PF Financials for " & P2_MonthLabel(yyyymm) & " done ✓"
+
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Part 2 complete for " & P2_MonthLabel(yyyymm) & "!" & vbNewLine & vbNewLine & _
+           "Working: " & newPath & vbNewLine & _
+           "Sent:    " & sentPath & vbNewLine & vbNewLine & _
+           "Review [UPDATE] placeholders in the draft email before sending.", _
+           vbInformation, "Part 2 Done"
+    Exit Sub
+
+PipelineError2:
+    Dim en As Long: en = Err.Number
+    Dim ed As String: ed = Err.Description
+    On Error Resume Next
+    If Not pfWb Is Nothing Then pfWb.Close False
+    If Not qsWb Is Nothing Then qsWb.Close False
+    On Error GoTo 0
+    P2Log "PIPELINE ERROR", "ERROR", "Error " & en & ": " & ed
+    Application.DisplayAlerts = True
+    Application.ScreenUpdating = True
+    MsgBox "Error " & en & ": " & ed & vbNewLine & vbNewLine & _
+           "Check Log sheet for details.", vbCritical, "Part 2 Error"
 End Sub
 
-'─── DATA CHECKS ──────────────────────────────────────────────────────────────
+'─── REFRESH TAB PIVOTS ────────────────────────────────────────────────────────
 
-Private Function RunChecks(ws As Worksheet, yyyymm As Long) As String
-    Dim errors As String
-    errors = ""
+Private Sub P2_RefreshTabPivots(wb As Workbook, tabName As String)
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = wb.Sheets(tabName)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+    Dim pt As PivotTable
+    For Each pt In ws.PivotTables
+        pt.RefreshTable
+    Next pt
+    ws.Calculate
+End Sub
 
-    ' Check minimum 30 columns
-    If ws.UsedRange.Columns.Count < 30 Then
-        errors = errors & "- Source file has fewer than 30 columns." & vbNewLine
+'─── NORMALISED NIM: REFRESH AND UPDATE SUMIF FORMULAS ─────────────────────────
+
+Private Sub P2_RefreshNIMTab(qsWb As Workbook, yyyymm As Long)
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = qsWb.Sheets(T_NORM_NIM)
+    On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+
+    ' Refresh pivot
+    Dim pt As PivotTable
+    For Each pt In ws.PivotTables
+        pt.RefreshTable
+    Next pt
+    Application.Calculate
+    Application.Wait Now + TimeValue("00:00:02")
+
+    ' Update SUMIF formula column references for each LCIN row
+    P2_UpdateNIMFormulas ws, yyyymm
+    ws.Calculate
+End Sub
+
+Private Sub P2_UpdateNIMFormulas(ws As Worksheet, yyyymm As Long)
+    Dim mo As Long: mo = yyyymm Mod 100
+    Dim yr As Long: yr = yyyymm \ 100
+
+    ' Determine which months to reference based on quarter logic
+    ' Intra-quarter: use previous complete quarter's 3 months
+    ' Quarter-end: use current quarter's 3 months
+    Dim isQEnd As Boolean
+    isQEnd = (mo = 3 Or mo = 6 Or mo = 9 Or mo = 12)
+
+    Dim m1 As Long, m2 As Long, m3 As Long, currMM As Long
+    currMM = yyyymm
+
+    If isQEnd Then
+        ' Current quarter's 3 months
+        Dim qStart As Long: qStart = mo - 2
+        m1 = yr * 100 + qStart
+        m2 = yr * 100 + qStart + 1
+        m3 = yyyymm
+    Else
+        ' Previous complete quarter's 3 months
+        Select Case mo
+            Case 1, 2:   m3 = (yr - 1) * 100 + 12 ' Dec prev year
+            Case 4, 5:   m3 = yr * 100 + 3
+            Case 7, 8:   m3 = yr * 100 + 6
+            Case 10, 11: m3 = yr * 100 + 9
+        End Select
+        m2 = P2_PrevYYYYMM(m3)
+        m1 = P2_PrevYYYYMM(m2)
     End If
 
-    ' Check YYYYMM exists in column AA
-    Dim found As Boolean
-    found = False
-    Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+    ' Find MTD NII columns for each period in this tab
+    Dim col1 As Long: col1 = P2_FindNIMCol(ws, m1, "NII")
+    Dim col2 As Long: col2 = P2_FindNIMCol(ws, m2, "NII")
+    Dim col3 As Long: col3 = P2_FindNIMCol(ws, m3, "NII")
+    Dim colC As Long: colC = P2_FindNIMCol(ws, currMM, "NII")
 
-    Dim i As Long
-    For i = 2 To lastRow
-        If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
-            found = True
-            Exit For
-        End If
-    Next i
-
-    If Not found Then
-        errors = errors & "- No rows found where column AA = " & yyyymm & "." & vbNewLine
+    ' Exit if any column not found
+    If col1 = 0 Or col2 = 0 Or col3 = 0 Or colC = 0 Then
+        P2Log "Normalised NIM", "INFO", _
+              "Could not find all NII columns — periods: " & m1 & "," & m2 & "," & m3 & "," & currMM & _
+              " — formula update skipped, recalculating existing formulas only."
+        Exit Sub
     End If
 
-    RunChecks = errors
-End Function
+    ' Column letters
+    Dim l1 As String: l1 = P2_ColLetter(col1)
+    Dim l2 As String: l2 = P2_ColLetter(col2)
+    Dim l3 As String: l3 = P2_ColLetter(col3)
+    Dim lC As String: lC = P2_ColLetter(colC)
 
-'─── DELETE EXISTING ROWS ─────────────────────────────────────────────────────
+    Dim ds As Long: ds = P2_DataStart()
+    Dim de As Long: de = P2_DataEnd()
 
-Private Sub DeleteExistingRows(ws As Worksheet, yyyymm As Long)
-    Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, COL_AA).End(xlUp).Row
+    ' Write formula for each LCIN row
+    Dim r As Long
+    For r = P2_NimStart() To P2_NimEnd()
+        If Trim(CStr(ws.Cells(r, 2).Value)) <> "" Then
+            Dim f As String
+            f = "=(SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & l1 & "$" & ds & ":$" & l1 & "$" & de & ")" & _
+                "+SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & l2 & "$" & ds & ":$" & l2 & "$" & de & ")" & _
+                "+SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & l3 & "$" & ds & ":$" & l3 & "$" & de & "))" & _
+                "/3-SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & lC & "$" & ds & ":$" & lC & "$" & de & ")"
 
-    Dim i As Long
-    For i = lastRow To 2 Step -1
-        Dim cellVal As Variant
-        cellVal = ws.Cells(i, COL_AA).Value
-        If IsNumeric(cellVal) Then
-            If CLng(cellVal) = yyyymm Then
-                ws.Rows(i).Delete
-            End If
+            ' Write in the current period's column
+            ws.Cells(r, colC).Formula = f
         End If
-    Next i
+    Next r
+
+    P2Log "Normalised NIM", "INFO", "SUMIF formulas updated. Months: " & _
+          P2_MonthLabel(m1) & "+" & P2_MonthLabel(m2) & "+" & P2_MonthLabel(m3) & _
+          " → col " & l1 & "+" & l2 & "+" & l3 & " / 3 − " & lC
 End Sub
 
-'─── COPY FILTERED ROWS ───────────────────────────────────────────────────────
+Private Function P2_FindNIMCol(ws As Worksheet, yyyymm As Long, valueLabel As String) As Long
+    ' Find the column in the NIM tab for yyyymm's MTD NII sub-column
+    Dim lastCol As Long: lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
+    Dim r As Long, c As Long
 
-Private Sub CopyFilteredRows(srcWs As Worksheet, qsWs As Worksheet, yyyymm As Long)
-    Dim srcLastRow As Long
-    srcLastRow = srcWs.Cells(srcWs.Rows.Count, COL_AA).End(xlUp).Row
-
-    Dim qsLastRow As Long
-    qsLastRow = qsWs.Cells(qsWs.Rows.Count, 1).End(xlUp).Row
-
-    Dim destRow As Long
-    destRow = qsLastRow + 1
-
-    Dim i As Long
-    For i = 2 To srcLastRow
-        If IsNumeric(srcWs.Cells(i, COL_AA).Value) Then
-            If CLng(srcWs.Cells(i, COL_AA).Value) = yyyymm Then
-                ' Copy only cols A-AD (1-30), paste as values
-                srcWs.Range(srcWs.Cells(i, 1), srcWs.Cells(i, 30)).Copy
-                qsWs.Cells(destRow, 1).PasteSpecial xlPasteValues
-                destRow = destRow + 1
+    ' Find header row containing YYYYMM
+    Dim hdRow As Long: hdRow = 0
+    For r = 1 To 25
+        For c = 1 To lastCol
+            If IsNumeric(ws.Cells(r, c).Value) Then
+                If CLng(ws.Cells(r, c).Value) = yyyymm Then
+                    hdRow = r: Exit For
+                End If
             End If
+        Next c
+        If hdRow > 0 Then Exit For
+    Next r
+
+    If hdRow = 0 Then P2_FindNIMCol = 0: Exit Function
+
+    ' Find column of yyyymm first
+    Dim mmCol As Long: mmCol = 0
+    For c = 1 To lastCol
+        If IsNumeric(ws.Cells(hdRow, c).Value) Then
+            If CLng(ws.Cells(hdRow, c).Value) = yyyymm Then mmCol = c: Exit For
         End If
-    Next i
-    Application.CutCopyMode = False
-End Sub
+    Next c
+    If mmCol = 0 Then P2_FindNIMCol = 0: Exit Function
 
-'─── WRITE AE / AF FORMULAS ───────────────────────────────────────────────────
-
-Private Sub WriteFormulas(ws As Worksheet, yyyymm As Long)
-    Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
-
-    ' Find first row for this YYYYMM
-    Dim startRow As Long
-    startRow = 0
-    Dim i As Long
-    For i = 2 To lastRow
-        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
-            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
-                startRow = i
-                Exit For
-            End If
-        End If
-    Next i
-
-    If startRow = 0 Then Exit Sub
-
-    ' Find last row for this YYYYMM
-    Dim endRow As Long
-    endRow = startRow
-    For i = startRow + 1 To lastRow
-        If IsNumeric(ws.Cells(i, COL_AA).Value) Then
-            If CLng(ws.Cells(i, COL_AA).Value) = yyyymm Then
-                endRow = i
-            End If
-        End If
-    Next i
-
-    ' Get lookup column letter for this month
-    Dim lookupCol As String
-    lookupCol = GetLookupCol(yyyymm)
-
-    For i = startRow To endRow
-        ' AE: concatenate F, E, N
-        ws.Cells(i, COL_AE).Formula = "=F" & i & "&E" & i & "&N" & i
-
-        ' AF: if col Q contains "card" return "Card", else dynamic vlookup
-        ws.Cells(i, COL_AF).Formula = _
-            "=IF(ISNUMBER(SEARCH(""card"",Q" & i & ")),""Card""," & _
-            "IFERROR(VLOOKUP(AE" & i & ",'" & CHECK_DUP_TAB & "'!" & _
-            lookupCol & ":" & lookupCol & ",1,0),""*No""))"
-    Next i
-End Sub
-
-'─── COPY PIVOTS TO OUTPUT FILE ───────────────────────────────────────────────
-
-Private Sub CopyPivotsToOutput(qsWb As Workbook, outPath As String, _
-                                niiData() As Variant, feeData() As Variant)
-    Dim pivotWs As Worksheet
-    Set pivotWs = qsWb.Sheets(PIVOT_TAB)
-
-    ' Create new workbook
-    Dim outWb As Workbook
-    Set outWb = Workbooks.Add
-
-    ' Remove extra sheets (keep only 1)
-    Do While outWb.Sheets.Count > 1
-        outWb.Sheets(outWb.Sheets.Count).Delete
-    Loop
-
-    Dim pivots(1 To 5) As String
-    pivots(1) = PIVOT_1
-    pivots(2) = PIVOT_2
-    pivots(3) = PIVOT_3
-    pivots(4) = PIVOT_4
-    pivots(5) = PIVOT_5
-
-    Dim idx As Long
-    For idx = 1 To 5
-        Dim parts() As String
-        parts = Split(pivots(idx), "|")
-        Dim startCell As String
-        Dim tabName   As String
-        startCell = parts(0)
-        tabName   = parts(1)
-
-        ' Get pivot range by expanding from start cell
-        Dim pvRange As Range
-        Set pvRange = pivotWs.Range(startCell).CurrentRegion
-
-        ' Get values
-        Dim pvData() As Variant
-        pvData = pvRange.Value
-
-        ' Store NII (idx=3) and Fee (idx=4) for MoM
-        If idx = 3 Then niiData = pvData
-        If idx = 4 Then feeData = pvData
-
-        ' Write to output workbook
-        Dim outWs As Worksheet
-        If idx = 1 Then
-            Set outWs = outWb.Sheets(1)
-            outWs.Name = tabName
-        Else
-            Set outWs = outWb.Sheets.Add(After:=outWb.Sheets(outWb.Sheets.Count))
-            outWs.Name = tabName
-        End If
-
-        outWs.Range("A1").Resize(UBound(pvData, 1), UBound(pvData, 2)).Value = pvData
-    Next idx
-
-    outWb.SaveAs outPath, xlOpenXMLWorkbook
-    outWb.Close
-End Sub
-
-'─── MOM ANALYSIS ─────────────────────────────────────────────────────────────
-
-Private Function GetMomContributors(pvData() As Variant, label As String, yyyymm As Long) As String
-    On Error GoTo ErrHandler
-
-    If Not IsArray(pvData) Then
-        GetMomContributors = label & ": no data available."
-        Exit Function
-    End If
-
-    Dim prevMm As Long
-    prevMm = PrevYYYYMM(yyyymm)
-
-    ' Find column indices for current and previous month
-    Dim currCol As Long, prevCol As Long
-    currCol = 0: prevCol = 0
-
-    Dim c As Long
-    For c = 1 To UBound(pvData, 2)
-        If IsNumeric(pvData(1, c)) Then
-            If CLng(pvData(1, c)) = yyyymm Then currCol = c
-            If CLng(pvData(1, c)) = prevMm  Then prevCol = c
+    ' Search next 10 cols in sub-header row for the value label
+    Dim subRow As Long: subRow = hdRow + 1
+    Dim endC As Long: endC = Application.Min(mmCol + 10, lastCol)
+    For c = mmCol To endC
+        If InStr(1, LCase(CStr(ws.Cells(subRow, c).Value)), LCase(valueLabel)) > 0 Then
+            P2_FindNIMCol = c: Exit Function
         End If
     Next c
 
-    If currCol = 0 Or prevCol = 0 Then
-        GetMomContributors = label & ": could not locate month columns for MoM."
-        Exit Function
-    End If
+    P2_FindNIMCol = 0
+End Function
 
-    ' Collect movements
-    Dim names()  As String
-    Dim moves()  As Double
-    Dim count    As Long
-    count = 0
+Private Function P2_GetNormNIM(qsWb As Workbook, yyyymm As Long) As Double
+    On Error GoTo ErrH
+    Dim ws As Worksheet
+    On Error Resume Next: Set ws = qsWb.Sheets(T_NORM_NIM): On Error GoTo ErrH
+    If ws Is Nothing Then P2_GetNormNIM = 0: Exit Function
 
-    Dim r As Long
-    For r = 2 To UBound(pvData, 1)
-        Dim rowLabel As String
-        rowLabel = ""
-        If Not IsEmpty(pvData(r, 1)) Then rowLabel = CStr(pvData(r, 1))
+    ' Find normalised NIM % near current period
+    Dim nimCol As Long: nimCol = P2_FindNIMCol(ws, yyyymm, "NII")
+    If nimCol = 0 Then P2_GetNormNIM = 0: Exit Function
 
-        If rowLabel <> "" And LCase(rowLabel) <> "grand total" Then
-            Dim currVal As Double, prevVal As Double
-            currVal = 0: prevVal = 0
-            If IsNumeric(pvData(r, currCol)) Then currVal = CDbl(pvData(r, currCol))
-            If IsNumeric(pvData(r, prevCol)) Then prevVal = CDbl(pvData(r, prevCol))
-            Dim movement As Double
-            movement = currVal - prevVal
-            If movement <> 0 Then
-                count = count + 1
-                ReDim Preserve names(1 To count)
-                ReDim Preserve moves(1 To count)
-                names(count) = rowLabel
-                moves(count) = movement
+    ' Find header row to know where data ends / NIM% begins
+    Dim r As Long, c As Long
+    Dim hdRow As Long: hdRow = 0
+    For r = 1 To 25
+        For c = 1 To 50
+            If IsNumeric(ws.Cells(r, c).Value) Then
+                If CLng(ws.Cells(r, c).Value) = yyyymm Then hdRow = r: Exit For
+            End If
+        Next c
+        If hdRow > 0 Then Exit For
+    Next r
+
+    If hdRow = 0 Then P2_GetNormNIM = 0: Exit Function
+
+    ' Look for NIM % in rows 228-235 (yellow highlighted cells)
+    ' Value should be between 0.005 and 0.025 (0.5% to 2.5%)
+    For r = 228 To 240
+        Dim v As Variant: v = ws.Cells(r, nimCol).Value
+        If IsNumeric(v) Then
+            If CDbl(v) > 0.005 And CDbl(v) < 0.025 Then
+                P2_GetNormNIM = CDbl(v): Exit Function
             End If
         End If
     Next r
 
-    If count = 0 Then
-        GetMomContributors = label & ": no MoM movement detected."
-        Exit Function
-    End If
-
-    ' Sort by absolute movement descending (bubble sort)
-    Dim j As Long
-    Dim tempN As String, tempM As Double
-    For r = 1 To count - 1
-        For j = 1 To count - r
-            If Abs(moves(j)) < Abs(moves(j + 1)) Then
-                tempN = names(j): tempM = moves(j)
-                names(j) = names(j + 1): moves(j) = moves(j + 1)
-                names(j + 1) = tempN: moves(j + 1) = tempM
-            End If
-        Next j
-    Next r
-
-    ' Total movement
-    Dim totalMove As Double
-    totalMove = 0
-    For r = 1 To count
-        totalMove = totalMove + moves(r)
-    Next r
-
-    Dim absTotal As Double
-    absTotal = 0
-    For r = 1 To count
-        absTotal = absTotal + Abs(moves(r))
-    Next r
-
-    ' Accumulate contributors until >=80%
-    Dim lines As String
-    Dim cumulative As Double
-    cumulative = 0
-
-    Dim direction As String
-    direction = IIf(totalMove >= 0, "up", "down")
-
-    lines = label & " MoM (" & MonthLabel(prevMm) & " to " & MonthLabel(yyyymm) & "): " & _
-            Format(Abs(totalMove), "#,##0") & " " & direction & vbNewLine & _
-            "Key contributors (>=80% of movement):" & vbNewLine
-
-    For r = 1 To count
-        Dim pct As Double
-        pct = IIf(totalMove <> 0, moves(r) / totalMove * 100, 0)
-        Dim arrow As String
-        arrow = IIf(moves(r) >= 0, Chr(9650), Chr(9660))  ' ▲ or ▼
-        lines = lines & "  " & arrow & " " & names(r) & ": " & _
-                Format(moves(r), "+#,##0;-#,##0") & "  (" & Format(pct, "+0.0;-0.0") & "%)" & vbNewLine
-        cumulative = cumulative + Abs(moves(r))
-        If absTotal > 0 And cumulative / absTotal >= 0.8 Then Exit For
-    Next r
-
-    GetMomContributors = lines
-    Exit Function
-ErrHandler:
-    GetMomContributors = label & ": error in MoM analysis - " & Err.Description
+    P2_GetNormNIM = 0: Exit Function
+ErrH: P2_GetNormNIM = 0
 End Function
 
-'─── SEND EMAIL VIA OUTLOOK ───────────────────────────────────────────────────
+'─── UPDATE DIRECT COST LINKS ──────────────────────────────────────────────────
 
-Private Sub SendEmail(attachPath As String, yyyymm As Long, niiText As String, feeText As String)
-    Dim olApp  As Object
-    Dim olMail As Object
+Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
+    Dim mo As Long: mo = yyyymm Mod 100
+    Dim currCol As Long: currCol = 5 + mo  ' F=6 for Jan, G=7 for Feb...
+    Dim prevCol As Long: prevCol = currCol - 1
 
+    Dim prevMM As Long:   prevMM   = P2_PrevYYYYMM(yyyymm)
+    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
+    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
+
+    Dim r As Long
+    For r = 29 To 30
+        Dim prevF As String: prevF = plWs.Cells(r, prevCol).Formula
+        If prevF <> "" And prevF <> "0" Then
+            Dim newF As String: newF = prevF
+            ' Replace month label in filename (handles .xls and .xlsx)
+            newF = Replace(newF, " " & prevLbl & " ", " " & currLbl & " ")
+            newF = Replace(newF, "- " & prevLbl & " -", "- " & currLbl & " -")
+            plWs.Cells(r, currCol).Formula = newF
+        End If
+    Next r
+End Sub
+
+'─── BUILD COMMENTARY ──────────────────────────────────────────────────────────
+
+Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM As Double) As String
+    Dim mo As Long: mo = yyyymm Mod 100
+    Dim currCol As Long: currCol = 5 + mo
+    Dim prevCol As Long: prevCol = currCol - 1
+
+    Dim mLbl  As String: mLbl  = P2_MonthLabel(yyyymm)
+    Dim prevMM As Long:  prevMM = P2_PrevYYYYMM(yyyymm)
+    Dim pLbl  As String: pLbl  = P2_MonthLabel(prevMM)
+
+    ' Fixed column indices (from P&L_PF layout)
+    Const CN As Long = 14   ' Act YTD (col N)
+    Const CR As Long = 18   ' vs Bgt $ (col R)
+    Const CS As Long = 19   ' vs Bgt % (col S)
+    Const CW As Long = 23   ' Budget FY26 (col W)
+
+    ' Read key values
+    Dim totIncYTD As Double: totIncYTD = P2V(plWs, 25, CN)
+    Dim totVsBgt$ As Double: totVsBgt$ = P2V(plWs, 25, CR)
+    Dim totVsBgt% As Double: totVsBgt% = P2V(plWs, 25, CS)
+    Dim niiYTD    As Double: niiYTD    = P2V(plWs, 23, CN)
+    Dim niiVsBgt$ As Double: niiVsBgt$ = P2V(plWs, 23, CR)
+    Dim nonNiiYTD As Double: nonNiiYTD = P2V(plWs, 24, CN)
+    Dim nonNiiVs$ As Double: nonNiiVs$ = P2V(plWs, 24, CR)
+
+    Dim currNIM As Double: currNIM = P2V(plWs, 14, currCol)
+    Dim prevNIM As Double: prevNIM = P2V(plWs, 14, prevCol)
+    Dim bgtNIM  As Double: bgtNIM  = P2V(plWs, 14, CW)
+    Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 10000)
+
+    Dim currEOP As Double: currEOP = P2V(plWs, 11, currCol)
+    Dim prevEOP As Double: prevEOP = P2V(plWs, 11, prevCol)
+    Dim eopMoM  As Double: eopMoM  = currEOP - prevEOP
+    Dim eopVs$  As Double: eopVs$  = P2V(plWs, 11, CR)
+    Dim bgtEOP  As Double: bgtEOP  = P2V(plWs, 11, CW)
+
+    Dim currNonNii As Double: currNonNii = P2V(plWs, 24, currCol)
+    Dim prevNonNii As Double: prevNonNii = P2V(plWs, 24, prevCol)
+    Dim nonNiiMoM  As Double: nonNiiMoM  = currNonNii - prevNonNii
+
+    Dim xsellYTD As Double: xsellYTD = P2V(plWs, 72, CN)
+    Dim cashYTD  As Double: cashYTD  = P2V(plWs, 76, CN)
+    Dim gfmYTD   As Double: gfmYTD   = P2V(plWs, 74, CN)
+    Dim tradeYTD As Double: tradeYTD = P2V(plWs, 75, CN)
+    Dim xsellVs$ As Double: xsellVs$ = P2V(plWs, 72, CR)
+
+    Dim dirExpYTD As Double: dirExpYTD = P2V(plWs, 31, CN)
+    Dim dirExpVs$ As Double: dirExpVs$ = P2V(plWs, 31, CR)
+
+    Dim hc As Long: hc = CLng(P2V(plWs, 68, currCol))
+
+    ' Build commentary
+    Dim t As String
+
+    ' YTD vs Budget
+    t = "YTD Act Vs Budget" & vbNewLine
+    t = t & "YTD " & mLbl & " Total Income of S$" & FM(Abs(totIncYTD)) & " was $" & _
+        FM(Abs(totVsBgt$)) & " (" & Format(Abs(totVsBgt%) * 100, "0") & "%) " & _
+        AB(totVsBgt$) & " budget, driven primarily by " & SW(niiVsBgt$) & " NII (" & _
+        FMS(niiVsBgt$) & ") offset by " & SW(nonNiiVs$) & " non-interest income of " & _
+        FMS(nonNiiVs$) & "." & vbNewLine & vbNewLine
+
+    ' NII
+    t = t & "NII of " & FM(Abs(niiYTD)) & " was $" & FM(Abs(niiVsBgt$)) & " " & _
+        AB(niiVsBgt$) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
+        "($" & FB(Abs(currEOP)) & "bn vs $" & FB(Abs(bgtEOP)) & "bn budget) and compressed NIM " & _
+        "(" & Format(Abs(currNIM) * 100, "0.00") & "% vs " & Format(Abs(bgtNIM) * 100, "0.00") & "% budget)]." & _
+        vbNewLine & vbNewLine
+
+    ' NIM
+    t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
+        Format(Abs(prevNIM) * 100, "0.00") & "% in " & pLbl & " to " & _
+        Format(Abs(currNIM) * 100, "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
+    If normNIM > 0 Then
+        t = t & "Normalised NIM maintains at " & Format(normNIM * 100, "0.00") & "%."
+    End If
+    t = t & vbNewLine & vbNewLine
+
+    ' EOP Assets
+    t = t & "EOP Asset Balance " & GD(eopMoM) & " $" & FB(Abs(eopMoM)) & " MoM to S$" & _
+        FB(Abs(currEOP)) & ", but remained $" & FB(Abs(eopVs$)) & " " & AB(eopVs$) & _
+        " budget (budget: $" & FB(Abs(bgtEOP)) & ") resulting in a " & _
+        IIf(eopVs$ < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
+
+    ' Non-NII and Fees
+    t = t & mLbl & " Non-NII " & ID(CLng(nonNiiMoM * 10)) & " $" & FM(Abs(nonNiiMoM)) & _
+        " MoM to $" & FM(Abs(currNonNii)) & ". Key fee contributors:" & vbNewLine
+    t = t & "[UPDATE: Copy fee contributors from Caselist email]" & vbNewLine & vbNewLine
+
+    ' X-selling
+    t = t & "YTD " & mLbl & " X-selling Income of $" & FM(Abs(xsellYTD)) & _
+        " is mainly derived from:" & vbNewLine
+    t = t & "- Cash +" & FM(Abs(cashYTD)) & vbNewLine
+    t = t & "- GFM Sales $" & FM(Abs(gfmYTD)) & "; and" & vbNewLine
+    t = t & "- Trade +" & FM(Abs(tradeYTD)) & vbNewLine & vbNewLine
+
+    ' Direct Expense
+    t = t & "YTD " & mLbl & " Direct Expense of $" & FM(Abs(dirExpYTD)) & " was $" & _
+        FM(Abs(dirExpVs$)) & " " & AB(dirExpVs$) & " budget." & vbNewLine & vbNewLine
+
+    ' Headcount
+    t = t & mLbl & " Regional Headcount remained at " & hc & _
+        "; [UPDATE: -X vs Dec YY and -Y vs Bgt YY]."
+
+    P2_BuildCommentary = t
+End Function
+
+'─── UPDATE COMMENTARY TEXT BOX ────────────────────────────────────────────────
+
+Private Sub P2_UpdateTextBox(dashWs As Worksheet, commentary As String)
+    Dim shp As Shape, target As Shape
+
+    ' Find text box in right area (column Z onwards = col 26+)
+    For Each shp In dashWs.Shapes
+        If shp.Type = msoTextBox Then
+            If shp.Left >= dashWs.Columns("Z").Left Then
+                Set target = shp: Exit For
+            End If
+        End If
+    Next shp
+
+    ' Fallback: any text box
+    If target Is Nothing Then
+        For Each shp In dashWs.Shapes
+            If shp.Type = msoTextBox Then Set target = shp: Exit For
+        Next shp
+    End If
+
+    If Not target Is Nothing Then
+        With target.TextFrame
+            .AutoSize = False
+            .Characters.Text = commentary
+        End With
+    Else
+        MsgBox "Commentary text box not found on " & T_PL_DASH & "." & vbNewLine & _
+               "Please paste commentary manually.", vbExclamation
+    End If
+End Sub
+
+'─── CREATE SENT FILE ──────────────────────────────────────────────────────────
+
+Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As String)
+    ' Copy working file
+    pfWb.SaveCopyAs sentPath
+
+    Dim sentWb As Workbook: Set sentWb = Workbooks.Open(sentPath)
+    Application.ScreenUpdating = False
+
+    ' 1. Paste values + formats over pivot tabs
+    P2_PasteValues sentWb, T_PF_FEES
+    P2_PasteValues sentWb, T_INC_CNTRY
+    P2_PasteValues sentWb, T_XSELL
+    P2_PasteValues sentWb, T_CUST_LIST
+    P2_PasteValues sentWb, T_PL_DASH
+
+    ' 2. Close all groups
+    Dim ws As Worksheet
+    For Each ws In sentWb.Sheets
+        If ws.Visible = xlSheetVisible Then
+            On Error Resume Next
+            ws.Outline.ShowLevels RowLevels:=1, ColumnLevels:=1
+            On Error GoTo 0
+        End If
+    Next ws
+
+    ' 3. Break all external links
+    On Error Resume Next
+    Dim links As Variant: links = sentWb.LinkSources(xlExcelLinks)
+    If Not IsEmpty(links) Then
+        Dim i As Long
+        For i = 1 To UBound(links)
+            sentWb.BreakLink Name:=links(i), Type:=xlLinkTypeExcelLinks
+        Next i
+    End If
+    Application.Calculate
+    On Error GoTo 0
+
+    ' 4. Hide tabs
+    Dim toHide(1 To 11) As String
+    toHide(1) = T_PL_PF:      toHide(2) = T_PL_XCROSS:  toHide(3) = T_WORK_PF
+    toHide(4) = T_WORKING:    toHide(5) = T_TO_UPDATE:   toHide(6) = T_PF_FEES
+    toHide(7) = T_INC_CNTRY:  toHide(8) = T_XSELL:       toHide(9) = T_CUST_LIST
+    toHide(10) = T_WORK_PIVOTS: toHide(11) = T_NORM_NIM
+
+    Dim t As Long
+    For t = 1 To 11
+        On Error Resume Next
+        Set ws = sentWb.Sheets(toHide(t))
+        If Not ws Is Nothing Then ws.Visible = xlSheetHidden
+        On Error GoTo 0
+    Next t
+
+    ' 5. Activate P&L_PF dashboard as first visible tab
+    On Error Resume Next
+    sentWb.Sheets(T_PL_DASH).Activate
+    On Error GoTo 0
+
+    ' 6. Save as xlsx (strips macros)
+    Application.DisplayAlerts = False
+    sentWb.SaveAs sentPath, xlOpenXMLWorkbook
+    sentWb.Close
+    Application.DisplayAlerts = True
+End Sub
+
+Private Sub P2_PasteValues(wb As Workbook, tabName As String)
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = wb.Sheets(tabName): On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+    Dim rng As Range: Set rng = ws.UsedRange
+    rng.Copy
+    rng.PasteSpecial xlPasteValues
+    rng.PasteSpecial xlPasteFormats
+    Application.CutCopyMode = False
+    ws.Cells.WrapText = False
+End Sub
+
+'─── CAPTURE RANGE AS IMAGE ────────────────────────────────────────────────────
+
+Private Function P2_CaptureImage(ws As Worksheet, rngAddr As String, savePath As String) As Boolean
+    On Error GoTo ErrH
+    Dim rng As Range: Set rng = ws.Range(rngAddr)
+    rng.CopyPicture Appearance:=xlScreen, Format:=xlPicture
+    Dim cht As ChartObject
+    Set cht = ws.ChartObjects.Add(0, 0, rng.Width, rng.Height)
+    cht.Chart.Paste
+    cht.Chart.Export Filename:=savePath, FilterName:="PNG"
+    cht.Delete
+    Application.CutCopyMode = False
+    P2_CaptureImage = True
+    Exit Function
+ErrH: P2_CaptureImage = False
+End Function
+
+'─── SEND EMAIL WITH INLINE IMAGE ──────────────────────────────────────────────
+
+Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean, commentary As String, yyyymm As Long)
+    On Error GoTo ErrH
+    Dim olApp As Object, olMail As Object
     Set olApp  = CreateObject("Outlook.Application")
     Set olMail = olApp.CreateItem(0)
 
-    Dim period As String
-    period = MonthLabel(yyyymm)
+    Dim mLbl As String: mLbl = P2_MonthLabel(yyyymm)
 
-    Dim body As String
-    body = "Hi Steve," & vbNewLine & vbNewLine & _
-           "Please find attached the updated PF Caselist - EOP Asset Balance and Total Income by Country." & _
-           vbNewLine & vbNewLine & _
-           niiText & vbNewLine & _
-           feeText & vbNewLine & _
-           "Best regards," & vbNewLine & EMAIL_NAME
+    ' Build HTML body
+    Dim imgTag As String: imgTag = ""
+    If imgOK And Dir(imgPath) <> "" Then
+        imgTag = "<img src='cid:pfdashboard.png' style='max-width:100%;border:1px solid #ccc;'/><br><br>"
+    End If
+
+    Dim htmlComm As String
+    htmlComm = Replace(Replace(commentary, "&", "&amp;"), vbNewLine, "<br>")
+
+    Dim html As String
+    html = "<html><body style='font-family:Calibri;font-size:11pt;'>" & _
+           "<p>Hi " & P2_Greeting() & ",</p>" & _
+           "<p>Attached Project Finance " & mLbl & " Financials for your information.</p>" & _
+           imgTag & _
+           "<p>" & htmlComm & "</p>" & _
+           "<p>Regards,<br>" & P2_YourName() & "</p>" & _
+           "</body></html>"
 
     With olMail
-        .To      = EMAIL_TO
-        .CC      = EMAIL_CC
-        .Subject = "PF " & period & " Caselist - EOP Asset Balance and Total Income by Country"
-        .Body    = body
-        .Attachments.Add attachPath
-        .Send
-    End With
+        .To      = P2_EmailTo()
+        .CC      = P2_EmailCC()
+        .Subject = mLbl & " PF Financials"
+        .Attachments.Add sentPath
 
-    Set olMail = Nothing
-    Set olApp  = Nothing
+        If imgOK And Dir(imgPath) <> "" Then
+            Dim att As Object
+            Set att = .Attachments.Add(imgPath, 1, 0)
+            att.PropertyAccessor.SetProperty _
+                "http://schemas.microsoft.com/mapi/proptag/0x3712001F", "pfdashboard.png"
+        End If
+
+        .HTMLBody = html
+        .Display
+    End With
+    Exit Sub
+ErrH:
+    MsgBox "Email could not be opened automatically." & vbNewLine & _
+           "Sent file: " & sentPath, vbExclamation, "Email Warning"
 End Sub
 
-'─── HELPERS ──────────────────────────────────────────────────────────────────
+'─── LOG ───────────────────────────────────────────────────────────────────────
 
-Private Function GetLookupCol(yyyymm As Long) As String
-    Dim baseYr  As Long, baseMo As Long
-    Dim currYr  As Long, currMo As Long
-    Dim diff    As Long, colIdx As Long
+Private Sub P2Log(stepName As String, status As String, msg As String)
+    On Error Resume Next
+    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Log"): On Error GoTo 0
+    If ws Is Nothing Then Exit Sub
+    Dim nr As Long: nr = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
+    ws.Cells(nr, 1).Value = Format(Now, "DD/MM/YYYY HH:MM:SS")
+    ws.Cells(nr, 2).Value = "Part2"
+    ws.Cells(nr, 3).Value = stepName
+    ws.Cells(nr, 4).Value = status
+    ws.Cells(nr, 5).Value = msg
+    Select Case UCase(status)
+        Case "RUNNING": ws.Cells(nr, 4).Interior.Color = RGB(255, 255, 180)
+        Case "OK":      ws.Cells(nr, 4).Interior.Color = RGB(180, 255, 180)
+        Case "ERROR":   ws.Cells(nr, 4).Interior.Color = RGB(255, 180, 180)
+        Case "INFO":    ws.Cells(nr, 4).Interior.Color = RGB(180, 220, 255)
+    End Select
+    Application.ScreenUpdating = True: DoEvents
+End Sub
 
-    baseYr = BASE_MONTH \ 100
-    baseMo = BASE_MONTH Mod 100
-    currYr = yyyymm \ 100
-    currMo = yyyymm Mod 100
+'─── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
 
-    diff   = (currYr - baseYr) * 12 + (currMo - baseMo)
-    colIdx = BASE_COL_IDX + diff
+Private Function P2V(ws As Worksheet, r As Long, c As Long) As Double
+    On Error Resume Next
+    Dim v As Variant: v = ws.Cells(r, c).Value
+    If IsNumeric(v) Then P2V = CDbl(v) Else P2V = 0
+End Function
 
-    ' Convert column index to letter(s)
-    Dim colLtr As String
-    If colIdx <= 26 Then
-        colLtr = Chr(64 + colIdx)
+Private Function FM(v As Double) As String:  FM  = "$" & Format(v, "0.0") & "m":             End Function
+Private Function FMS(v As Double) As String: FMS = IIf(v >= 0, "+", "-") & FM(Abs(v)):       End Function
+Private Function FB(v As Double) As String:  FB  = "$" & Format(v, "0.0") & "b":             End Function
+Private Function AB(v As Double) As String:  AB  = IIf(v >= 0, "above", "below"):            End Function
+Private Function SW(v As Double) As String:  SW  = IIf(v >= 0, "stronger", "weaker"):        End Function
+Private Function ID(v As Long) As String:    ID  = IIf(v >= 0, "increased", "decreased"):    End Function
+Private Function GD(v As Double) As String:  GD  = IIf(v >= 0, "grew", "declined"):          End Function
+
+Private Function P2_ColLetter(col As Long) As String
+    If col <= 26 Then
+        P2_ColLetter = Chr(64 + col)
     Else
-        colLtr = Chr(64 + (colIdx - 1) \ 26) & Chr(65 + (colIdx - 1) Mod 26)
-    End If
-    GetLookupCol = colLtr
-End Function
-
-Private Function PrevYYYYMM(yyyymm As Long) As Long
-    Dim yr As Long, mo As Long
-    yr = yyyymm \ 100
-    mo = yyyymm Mod 100
-    If mo = 1 Then
-        PrevYYYYMM = (yr - 1) * 100 + 12
-    Else
-        PrevYYYYMM = yr * 100 + (mo - 1)
+        P2_ColLetter = Chr(64 + (col - 1) \ 26) & Chr(65 + (col - 1) Mod 26)
     End If
 End Function
 
-Private Function MonthLabel(yyyymm As Long) As String
-    Dim yr As Long, mo As Long
-    yr = yyyymm \ 100
-    mo = yyyymm Mod 100
-    Dim mNames(1 To 12) As String
-    mNames(1)  = "Jan": mNames(2)  = "Feb": mNames(3)  = "Mar"
-    mNames(4)  = "Apr": mNames(5)  = "May": mNames(6)  = "Jun"
-    mNames(7)  = "Jul": mNames(8)  = "Aug": mNames(9)  = "Sep"
-    mNames(10) = "Oct": mNames(11) = "Nov": mNames(12) = "Dec"
-    MonthLabel = mNames(mo) & " " & Right(CStr(yr), 2)
+Private Function P2_MonthLabel(yyyymm As Long) As String
+    Dim m(1 To 12) As String
+    m(1)="Jan": m(2)="Feb": m(3)="Mar": m(4)="Apr":  m(5)="May":  m(6)="Jun"
+    m(7)="Jul": m(8)="Aug": m(9)="Sep": m(10)="Oct": m(11)="Nov": m(12)="Dec"
+    P2_MonthLabel = m(yyyymm Mod 100) & " " & Right(CStr(yyyymm \ 100), 2)
 End Function
 
-'=============================================================================
-' PASTE THIS PART INTO "ThisWorkbook" in the VBA Editor
-'=============================================================================
-'
-' Private Sub Workbook_Open()
-'     ' Start watching the folder 60 seconds after file opens
-'     Application.OnTime Now + TimeValue("00:00:10"), "WatchFolder"
-' End Sub
-'
-'=============================================================================
+Private Function P2_PrevYYYYMM(yyyymm As Long) As Long
+    Dim yr As Long: yr = yyyymm \ 100
+    Dim mo As Long: mo = yyyymm Mod 100
+    If mo = 1 Then P2_PrevYYYYMM = (yr - 1) * 100 + 12 _
+    Else P2_PrevYYYYMM = yr * 100 + (mo - 1)
+End Function
+
+Private Function P2_NextYYYYMM(yyyymm As Long) As Long
+    Dim yr As Long: yr = yyyymm \ 100
+    Dim mo As Long: mo = yyyymm Mod 100
+    If mo = 12 Then P2_NextYYYYMM = (yr + 1) * 100 + 1 _
+    Else P2_NextYYYYMM = yr * 100 + (mo + 1)
+End Function
+
+Private Function P2_ExtractPeriod(fileName As String) As Long
+    Dim months(1 To 12) As String
+    months(1)="Jan": months(2)="Feb": months(3)="Mar": months(4)="Apr"
+    months(5)="May": months(6)="Jun": months(7)="Jul": months(8)="Aug"
+    months(9)="Sep": months(10)="Oct": months(11)="Nov": months(12)="Dec"
+    Dim i As Long
+    For i = 1 To 12
+        Dim pos As Long: pos = InStr(1, fileName, " " & months(i) & " ", vbTextCompare)
+        If pos > 0 Then
+            Dim yrStr As String: yrStr = Mid(fileName, pos + Len(months(i)) + 2, 2)
+            If IsNumeric(yrStr) Then
+                P2_ExtractPeriod = (2000 + CLng(yrStr)) * 100 + i
+                Exit Function
+            End If
+        End If
+    Next i
+    P2_ExtractPeriod = 0
+End Function
