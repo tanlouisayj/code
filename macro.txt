@@ -1,8 +1,22 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v7)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v8)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
+' CHANGES IN v8 (vs v7):
+'   - P2_UpdateDCLinks (Step 3):
+'       * Completely rewrote row-29/30 write loop into two separate blocks.
+'       * Row 30 now has its own template scan (Strategy A): scans ALL cols
+'         1..currCol in row 30 for a valid "='" external-link formula, derives
+'         its own column offset and month label — independent of row 29's template.
+'       * Strategy B fallback (no valid row-30 template found): derives row 30's
+'         formula from the newly-built row-29 formula by replacing only the
+'         external-file row number (e.g. $31 → $32), reading the target row
+'         number from any existing working row-30 formula in earlier columns.
+'       * Root cause fixed: old code read Cells(30, tmplCol).Formula which
+'         returned garbage on a broken/not-yet-open link, then fell back to
+'         tmplF (row-29 template), so row 30 got the same $row$ reference as
+'         row 29 — both ended up pointing at the same source row.
 ' CHANGES IN v7 (vs v6):
 '   - P2_UpdateDCLinks (Step 3):
 '       * Rewrote column-advance logic: instead of text-substituting the prev
@@ -717,30 +731,153 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Application.DisplayAlerts   = False
     Application.AskToUpdateLinks = False
 
+    ' ── Find a valid row-30 template by scanning cols 1..currCol (same as row 29)
+    '    Do this BEFORE the write loop so broken-link cells in row 30 don't
+    '    force a fallback to the row-29 template (which has a different row ref).
+    Dim tmplF30     As String: tmplF30     = ""
+    Dim tmplCol30   As Long:   tmplCol30   = 0
+    Dim tmplMonth30 As String: tmplMonth30 = ""
+    Dim tmplYr230   As String: tmplYr230   = ""
+    Dim f30 As String, h8_30 As String, mi30 As Long, yp30 As Long
+
+    For c = 1 To currCol
+        f30 = ""
+        On Error Resume Next: f30 = plWs.Cells(30, c).Formula: On Error GoTo 0
+        If Left(f30, 2) = "='" And InStr(f30, "[") > 0 Then
+            tmplF30   = f30
+            tmplCol30 = c
+            h8_30 = Trim(CStr(plWs.Cells(8, c).Value))
+            tmplMonth30 = ""
+            For mi30 = 1 To 12
+                If InStr(1, h8_30, mNames(mi30), vbTextCompare) > 0 Then
+                    tmplMonth30 = mNames(mi30): Exit For
+                End If
+            Next mi30
+            tmplYr230 = ""
+            For yp30 = 1 To Len(h8_30) - 1
+                If IsNumeric(Mid(h8_30, yp30, 2)) And CLng(Mid(h8_30, yp30, 2)) >= 20 Then
+                    tmplYr230 = Mid(h8_30, yp30, 2): Exit For
+                End If
+            Next yp30
+        End If
+    Next c
+
+    P2Log "Direct Cost Links", "INFO", _
+          "Row30 template col=" & tmplCol30 & " (" & tmplMonth30 & " " & tmplYr230 & "): " & Left(tmplF30, 80)
+
     Dim r As Long, rowTmpl As String, newF As String, wErr As Long
-    For r = 29 To 30
-        rowTmpl = ""
-        If r = 29 Then
-            rowTmpl = tmplF
-        Else
-            On Error Resume Next: rowTmpl = plWs.Cells(30, tmplCol).Formula: On Error GoTo 0
-            If Left(rowTmpl, 2) <> "='" Then rowTmpl = tmplF
+    ' ── Build row 29 formula ──────────────────────────────────────────────────
+    Dim newF29 As String
+    newF29 = tmplF
+    If tmplMonth <> "" And tmplYr2 <> "" Then
+        newF29 = Replace(newF29, tmplMonth & " " & tmplYr2, shortMo & " " & yr2)
+    End If
+    newF29 = P2_AdvanceExtColByN(newF29, colOffset)
+
+    wErr = 0
+    On Error Resume Next: plWs.Cells(29, currCol).Formula = newF29: wErr = Err.Number: On Error GoTo 0
+    If wErr <> 0 Then
+        P2Log "Direct Cost Links", "INFO", "Row 29 write error " & wErr & ": " & Left(newF29, 100)
+    Else
+        P2Log "Direct Cost Links", "OK", "Row 29 col " & currCol & ": " & Left(newF29, 100)
+    End If
+
+    ' ── Build row 30 formula ──────────────────────────────────────────────────
+    ' Strategy A: use the scanned row-30 template (different row ref from row 29)
+    ' Strategy B: fallback — derive from the just-written row-29 formula by
+    '             replacing its external-file row number with the row-30 row number
+    '             sourced from any valid row-30 formula we can find in other cols.
+    Dim newF30 As String
+
+    If tmplF30 <> "" Then
+        ' Strategy A — we have a genuine row-30 template
+        Dim offset30 As Long: offset30 = currCol - tmplCol30
+        newF30 = tmplF30
+        If tmplMonth30 <> "" And tmplYr230 <> "" Then
+            newF30 = Replace(newF30, tmplMonth30 & " " & tmplYr230, shortMo & " " & yr2)
+        End If
+        newF30 = P2_AdvanceExtColByN(newF30, offset30)
+        P2Log "Direct Cost Links", "INFO", "Row 30: using scanned template (Strategy A)"
+    Else
+        ' Strategy B — no valid row-30 template found; derive from row-29 new formula
+        ' by replacing the external-file row number.  We need to know which $ROW$
+        ' the row-29 formula references vs what row 30 should reference.
+        ' Read the actual row number from the row-29 template formula (tmplF).
+        Dim bangPos30 As Long: bangPos30 = InStrRev(tmplF, "!")
+        Dim rowRef29  As String: rowRef29 = ""
+        If bangPos30 > 0 Then
+            ' After "!" comes $COL$ROW  e.g.  !$Z$31
+            Dim afterBang As String: afterBang = Mid(tmplF, bangPos30 + 1)
+            ' Find second $ which precedes the row number
+            Dim dollar2 As Long: dollar2 = InStr(2, afterBang, "$")
+            If dollar2 > 0 Then
+                Dim rest30 As String: rest30 = Mid(afterBang, dollar2 + 1)
+                Dim rn As Long: rn = 0
+                Dim rk As Long
+                For rk = 1 To Len(rest30)
+                    If IsNumeric(Mid(rest30, rk, 1)) Then
+                        rn = rn * 10 + CLng(Mid(rest30, rk, 1))
+                    Else
+                        Exit For
+                    End If
+                Next rk
+                If rn > 0 Then rowRef29 = CStr(rn)
+            End If
         End If
 
-        newF = rowTmpl
-        If tmplMonth <> "" And tmplYr2 <> "" Then
-            newF = Replace(newF, tmplMonth & " " & tmplYr2, shortMo & " " & yr2)
-        End If
-        newF = P2_AdvanceExtColByN(newF, colOffset)
+        ' Now read the row number from any existing row-30 formula in other cols
+        ' We'll scan cols 1..currCol-1 looking for a valid row-30 formula
+        Dim rowRef30 As String: rowRef30 = ""
+        Dim fc30 As Long
+        For fc30 = 1 To currCol - 1
+            Dim ftest As String: ftest = ""
+            On Error Resume Next: ftest = plWs.Cells(30, fc30).Formula: On Error GoTo 0
+            If Left(ftest, 2) = "='" And InStr(ftest, "!") > 0 Then
+                Dim bp As Long: bp = InStrRev(ftest, "!")
+                Dim ab30 As String: ab30 = Mid(ftest, bp + 1)
+                Dim d2 As Long: d2 = InStr(2, ab30, "$")
+                If d2 > 0 Then
+                    Dim rr As String: rr = Mid(ab30, d2 + 1)
+                    Dim rnum As Long: rnum = 0
+                    Dim rki As Long
+                    For rki = 1 To Len(rr)
+                        If IsNumeric(Mid(rr, rki, 1)) Then
+                            rnum = rnum * 10 + CLng(Mid(rr, rki, 1))
+                        Else
+                            Exit For
+                        End If
+                    Next rki
+                    If rnum > 0 Then rowRef30 = CStr(rnum): Exit For
+                End If
+            End If
+        Next fc30
 
-        wErr = 0
-        On Error Resume Next: plWs.Cells(r, currCol).Formula = newF: wErr = Err.Number: On Error GoTo 0
-        If wErr <> 0 Then
-            P2Log "Direct Cost Links", "INFO", "Row " & r & " write error " & wErr & ": " & Left(newF, 100)
+        ' Build row-30 formula from row-29 new formula, swapping the row reference
+        newF30 = newF29
+        If rowRef29 <> "" And rowRef30 <> "" And rowRef29 <> rowRef30 Then
+            ' Replace "$<row29>  with  $<row30>  after the "!" only
+            Dim bangInNew As Long: bangInNew = InStrRev(newF30, "!")
+            If bangInNew > 0 Then
+                Dim prefix30 As String: prefix30 = Left(newF30, bangInNew)
+                Dim suffix30 As String: suffix30 = Mid(newF30, bangInNew + 1)
+                suffix30 = Replace(suffix30, "$" & rowRef29, "$" & rowRef30, 1, 1)
+                newF30 = prefix30 & suffix30
+            End If
+            P2Log "Direct Cost Links", "INFO", _
+                  "Row 30: derived from row-29 formula; replaced $" & rowRef29 & " with $" & rowRef30 & " (Strategy B)"
         Else
-            P2Log "Direct Cost Links", "OK",  "Row " & r & " col " & currCol & ": " & Left(newF, 100)
+            P2Log "Direct Cost Links", "INFO", _
+                  "Row 30: Strategy B row-ref detection failed (r29=" & rowRef29 & " r30=" & rowRef30 & "). Using row-29 formula as-is."
         End If
-    Next r
+    End If
+
+    wErr = 0
+    On Error Resume Next: plWs.Cells(30, currCol).Formula = newF30: wErr = Err.Number: On Error GoTo 0
+    If wErr <> 0 Then
+        P2Log "Direct Cost Links", "INFO", "Row 30 write error " & wErr & ": " & Left(newF30, 100)
+    Else
+        P2Log "Direct Cost Links", "OK", "Row 30 col " & currCol & ": " & Left(newF30, 100)
+    End If
 
     Application.DisplayAlerts   = savedAlerts
     Application.AskToUpdateLinks = savedAsk
