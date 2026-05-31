@@ -403,7 +403,7 @@ Private Sub P2_RefreshTabPivots(wb As Workbook, tabName As String)
     ws.Calculate
 End Sub
 
-'─── NORMALISED NIM: REFRESH AND UPDATE SUMIF FORMULAS ─────────────────────────
+'─── NORMALISED NIM: REFRESH AND UPDATE ALL FORMULAS ──────────────────────────
 
 Private Sub P2_RefreshNIMTab(qsWb As Workbook, yyyymm As Long)
     On Error Resume Next
@@ -411,7 +411,6 @@ Private Sub P2_RefreshNIMTab(qsWb As Workbook, yyyymm As Long)
     On Error GoTo 0
     If ws Is Nothing Then Exit Sub
 
-    ' Refresh pivot
     Dim pt As PivotTable
     For Each pt In ws.PivotTables
         pt.RefreshTable
@@ -419,34 +418,26 @@ Private Sub P2_RefreshNIMTab(qsWb As Workbook, yyyymm As Long)
     Application.Calculate
     Application.Wait Now + TimeValue("00:00:02")
 
-    ' Update SUMIF formula column references for each LCIN row
     P2_UpdateNIMFormulas ws, yyyymm
+    P2_WriteNIMPercentFormula ws, yyyymm
     ws.Calculate
 End Sub
 
 Private Sub P2_UpdateNIMFormulas(ws As Worksheet, yyyymm As Long)
     Dim mo As Long: mo = yyyymm Mod 100
     Dim yr As Long: yr = yyyymm \ 100
-
-    ' Determine which months to reference based on quarter logic
-    ' Intra-quarter: use previous complete quarter's 3 months
-    ' Quarter-end: use current quarter's 3 months
-    Dim isQEnd As Boolean
-    isQEnd = (mo = 3 Or mo = 6 Or mo = 9 Or mo = 12)
-
+    Dim isQEnd As Boolean: isQEnd = (mo = 3 Or mo = 6 Or mo = 9 Or mo = 12)
     Dim m1 As Long, m2 As Long, m3 As Long, currMM As Long
     currMM = yyyymm
 
     If isQEnd Then
-        ' Current quarter's 3 months
         Dim qStart As Long: qStart = mo - 2
         m1 = yr * 100 + qStart
         m2 = yr * 100 + qStart + 1
         m3 = yyyymm
     Else
-        ' Previous complete quarter's 3 months
         Select Case mo
-            Case 1, 2:   m3 = (yr - 1) * 100 + 12 ' Dec prev year
+            Case 1, 2:   m3 = (yr - 1) * 100 + 12
             Case 4, 5:   m3 = yr * 100 + 3
             Case 7, 8:   m3 = yr * 100 + 6
             Case 10, 11: m3 = yr * 100 + 9
@@ -455,30 +446,23 @@ Private Sub P2_UpdateNIMFormulas(ws As Worksheet, yyyymm As Long)
         m1 = P2_PrevYYYYMM(m2)
     End If
 
-    ' Find MTD NII columns for each period in this tab
     Dim col1 As Long: col1 = P2_FindNIMCol(ws, m1, "NII")
     Dim col2 As Long: col2 = P2_FindNIMCol(ws, m2, "NII")
     Dim col3 As Long: col3 = P2_FindNIMCol(ws, m3, "NII")
     Dim colC As Long: colC = P2_FindNIMCol(ws, currMM, "NII")
 
-    ' Exit if any column not found
     If col1 = 0 Or col2 = 0 Or col3 = 0 Or colC = 0 Then
-        P2Log "Normalised NIM", "INFO", _
-              "Could not find all NII columns — periods: " & m1 & "," & m2 & "," & m3 & "," & currMM & _
-              " — formula update skipped, recalculating existing formulas only."
+        P2Log "Normalised NIM", "INFO", "Could not find all NII columns — " & m1 & "," & m2 & "," & m3 & "," & currMM & " — skipping formula update."
         Exit Sub
     End If
 
-    ' Column letters
     Dim l1 As String: l1 = P2_ColLetter(col1)
     Dim l2 As String: l2 = P2_ColLetter(col2)
     Dim l3 As String: l3 = P2_ColLetter(col3)
     Dim lC As String: lC = P2_ColLetter(colC)
-
     Dim ds As Long: ds = P2_DataStart()
     Dim de As Long: de = P2_DataEnd()
 
-    ' Write formula for each LCIN row
     Dim r As Long
     For r = P2_NimStart() To P2_NimEnd()
         If Trim(CStr(ws.Cells(r, 2).Value)) <> "" Then
@@ -487,51 +471,118 @@ Private Sub P2_UpdateNIMFormulas(ws As Worksheet, yyyymm As Long)
                 "+SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & l2 & "$" & ds & ":$" & l2 & "$" & de & ")" & _
                 "+SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & l3 & "$" & ds & ":$" & l3 & "$" & de & "))" & _
                 "/3-SUMIF($B$" & ds & ":$B$" & de & ",$B" & r & ",$" & lC & "$" & ds & ":$" & lC & "$" & de & ")"
-
-            ' Write in the current period's column
             ws.Cells(r, colC).Formula = f
         End If
     Next r
 
     P2Log "Normalised NIM", "INFO", "SUMIF formulas updated. Months: " & _
           P2_MonthLabel(m1) & "+" & P2_MonthLabel(m2) & "+" & P2_MonthLabel(m3) & _
-          " → col " & l1 & "+" & l2 & "+" & l3 & " / 3 − " & lC
+          " cols " & l1 & "+" & l2 & "+" & l3 & " / 3 minus col " & lC
 End Sub
 
-Private Function P2_FindNIMCol(ws As Worksheet, yyyymm As Long, valueLabel As String) As Long
-    ' Find the column in the NIM tab for yyyymm's MTD NII sub-column
-    Dim lastCol As Long: lastCol = ws.Cells(1, ws.Columns.Count).End(xlToLeft).Column
-    Dim r As Long, c As Long
+Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
+    ' Find columns for current period NII and Avg Asset Balance
+    Dim colNII   As Long: colNII   = P2_FindNIMCol(ws, yyyymm, "NII")
+    Dim colAsset As Long: colAsset = P2_FindNIMCol(ws, yyyymm, "Asset")
 
-    ' Find header row containing YYYYMM
-    Dim hdRow As Long: hdRow = 0
-    For r = 1 To 25
-        For c = 1 To lastCol
-            If IsNumeric(ws.Cells(r, c).Value) Then
-                If CLng(ws.Cells(r, c).Value) = yyyymm Then
-                    hdRow = r: Exit For
-                End If
-            End If
-        Next c
-        If hdRow > 0 Then Exit For
+    If colNII = 0 Or colAsset = 0 Then
+        P2Log "Normalised NIM %", "INFO", "Could not find NII or Asset column for " & yyyymm & " — NIM % formula not updated."
+        Exit Sub
+    End If
+
+    ' Find Grand Total row (scan col A and B for "Grand Total")
+    Dim grandTotalRow As Long: grandTotalRow = 0
+    Dim lastRow As Long: lastRow = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row
+    Dim r As Long
+    For r = 1 To lastRow
+        If InStr(1, LCase(CStr(ws.Cells(r, 1).Value)), "grand total") > 0 Or _
+           InStr(1, LCase(CStr(ws.Cells(r, 2).Value)), "grand total") > 0 Then
+            grandTotalRow = r: Exit For
+        End If
     Next r
 
-    If hdRow = 0 Then P2_FindNIMCol = 0: Exit Function
+    If grandTotalRow = 0 Then
+        P2Log "Normalised NIM %", "INFO", "Grand Total row not found — NIM % formula not updated."
+        Exit Sub
+    End If
 
-    ' Find column of yyyymm first
+    ' Days in reporting month — correct per month, handles leap years
+    Dim daysInMo As Long: daysInMo = P2_DaysInMonth(yyyymm)
+
+    ' Find NIM % cell — search rows 228-245 in NII column for existing formula or NIM-range value
+    Dim nimPctRow As Long: nimPctRow = 0
+    Dim nimPctCol As Long: nimPctCol = colNII
+    Dim v As Variant
+    For r = 228 To 245
+        v = ws.Cells(r, nimPctCol).Value
+        If ws.Cells(r, nimPctCol).HasFormula Then
+            nimPctRow = r: Exit For
+        End If
+        If IsNumeric(v) Then
+            If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
+                nimPctRow = r: Exit For
+            End If
+        End If
+    Next r
+    If nimPctRow = 0 Then nimPctRow = 233  ' default fallback
+
+    ' Build formula:
+    ' = (SUM(adjustmentRows + GrandTotal NII) / daysInMonth * 365) / GrandTotal AvgAsset
+    Dim lNII  As String: lNII  = P2_ColLetter(colNII)
+    Dim lAss  As String: lAss  = P2_ColLetter(colAsset)
+    Dim nimSt As Long:   nimSt = P2_NimStart()
+    Dim nimEn As Long:   nimEn = P2_NimEnd()
+
+    Dim nimFormula As String
+    nimFormula = "=(SUM(" & lNII & nimSt & ":" & lNII & nimEn & "," & lNII & grandTotalRow & ")" & _
+                 "/" & daysInMo & "*365)" & _
+                 "/" & lAss & grandTotalRow
+
+    ws.Cells(nimPctRow, nimPctCol).Formula = nimFormula
+    ws.Cells(nimPctRow, nimPctCol).NumberFormat = "0.00%"
+
+    P2Log "Normalised NIM %", "OK", "NIM % formula at row " & nimPctRow & " col " & lNII & _
+          ". Grand Total row " & grandTotalRow & ". Days = " & daysInMo & "."
+End Sub
+
+Private Function P2_DaysInMonth(yyyymm As Long) As Long
+    Dim yr As Long: yr = yyyymm \ 100
+    Dim mo As Long: mo = yyyymm Mod 100
+    Select Case mo
+        Case 1, 3, 5, 7, 8, 10, 12: P2_DaysInMonth = 31
+        Case 4, 6, 9, 11:            P2_DaysInMonth = 30
+        Case 2
+            If (yr Mod 4 = 0 And yr Mod 100 <> 0) Or yr Mod 400 = 0 Then
+                P2_DaysInMonth = 29
+            Else
+                P2_DaysInMonth = 28
+            End If
+    End Select
+End Function
+
+Private Function P2_FindNIMCol(ws As Worksheet, yyyymm As Long, valueLabel As String) As Long
+    Dim lastCol As Long: lastCol = ws.Cells(9, ws.Columns.Count).End(xlToLeft).Column
+    Dim c As Long
+
+    ' Row 9 has YYYYMM headers — check both numeric and text format
+    Dim yyyymmStr As String: yyyymmStr = CStr(yyyymm)
     Dim mmCol As Long: mmCol = 0
+
     For c = 1 To lastCol
-        If IsNumeric(ws.Cells(hdRow, c).Value) Then
-            If CLng(ws.Cells(hdRow, c).Value) = yyyymm Then mmCol = c: Exit For
+        Dim cellVal As Variant: cellVal = ws.Cells(9, c).Value
+        If IsNumeric(cellVal) Then
+            If CLng(cellVal) = yyyymm Then mmCol = c: Exit For
+        ElseIf CStr(cellVal) = yyyymmStr Then
+            mmCol = c: Exit For
         End If
     Next c
+
     If mmCol = 0 Then P2_FindNIMCol = 0: Exit Function
 
-    ' Search next 10 cols in sub-header row for the value label
-    Dim subRow As Long: subRow = hdRow + 1
+    ' Search next 10 cols in sub-header row (row 10) for the value label
     Dim endC As Long: endC = Application.Min(mmCol + 10, lastCol)
     For c = mmCol To endC
-        If InStr(1, LCase(CStr(ws.Cells(subRow, c).Value)), LCase(valueLabel)) > 0 Then
+        If InStr(1, LCase(CStr(ws.Cells(10, c).Value)), LCase(valueLabel)) > 0 Then
             P2_FindNIMCol = c: Exit Function
         End If
     Next c
@@ -545,30 +596,16 @@ Private Function P2_GetNormNIM(qsWb As Workbook, yyyymm As Long) As Double
     On Error Resume Next: Set ws = qsWb.Sheets(T_NORM_NIM): On Error GoTo ErrH
     If ws Is Nothing Then P2_GetNormNIM = 0: Exit Function
 
-    ' Find normalised NIM % near current period
+    ' Use P2_FindNIMCol which now handles row 9 text format correctly
     Dim nimCol As Long: nimCol = P2_FindNIMCol(ws, yyyymm, "NII")
     If nimCol = 0 Then P2_GetNormNIM = 0: Exit Function
 
-    ' Find header row to know where data ends / NIM% begins
-    Dim r As Long, c As Long
-    Dim hdRow As Long: hdRow = 0
-    For r = 1 To 25
-        For c = 1 To 50
-            If IsNumeric(ws.Cells(r, c).Value) Then
-                If CLng(ws.Cells(r, c).Value) = yyyymm Then hdRow = r: Exit For
-            End If
-        Next c
-        If hdRow > 0 Then Exit For
-    Next r
-
-    If hdRow = 0 Then P2_GetNormNIM = 0: Exit Function
-
-    ' Look for NIM % in rows 228-235 (yellow highlighted cells)
-    ' Value should be between 0.005 and 0.025 (0.5% to 2.5%)
-    For r = 228 To 240
+    ' After writing NIM % formula, read back the calculated value from rows 228-245
+    Dim r As Long
+    For r = 228 To 245
         Dim v As Variant: v = ws.Cells(r, nimCol).Value
         If IsNumeric(v) Then
-            If CDbl(v) > 0.005 And CDbl(v) < 0.025 Then
+            If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
                 P2_GetNormNIM = CDbl(v): Exit Function
             End If
         End If
@@ -577,6 +614,7 @@ Private Function P2_GetNormNIM(qsWb As Workbook, yyyymm As Long) As Double
     P2_GetNormNIM = 0: Exit Function
 ErrH: P2_GetNormNIM = 0
 End Function
+
 
 '─── UPDATE DIRECT COST LINKS ──────────────────────────────────────────────────
 
