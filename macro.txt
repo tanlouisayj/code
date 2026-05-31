@@ -1,17 +1,21 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v3)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v4)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
-' CHANGES IN v3:
-'   - P2_GetFeeContributors: full diagnostic logging so you can see exactly
-'     what row/col/value is found; handles text AND numeric YYYYMM in row 5;
-'     logs every candidate cell so you can debug misses in the Log sheet.
-'   - P2_CreateSentFile: fixed "Working" tab hide — activates dashboard FIRST,
-'     then hides all tabs in one consolidated pass so Excel never complains
-'     about hiding the last visible sheet.
-'   - P2_FormatSentTab: changed number format from #,##0.000 → #,##0.00
-'     (applies to PF Fees, Total Inc Cust with X-selling, PF Cust List Income)
+' CHANGES IN v4 (vs v3):
+'   - P2_BuildCommentary:
+'       * currNIM now reads row 14 col N (14) — was dynamic currCol
+'       * currEOP now reads row 11 col N (14) — was dynamic currCol
+'       * Non-NII MoM = I24 - H24 (cols 9 and 8) — was currCol/prevCol
+'       * currNonNii = col I (9) row 24; prevNonNii = col H (8) row 24
+'       * currNonNii and prevNonNii passed to P2_GetFeeContributors as totals
+'   - P2_GetFeeContributors:
+'       * Signature extended: now accepts currTotal and prevTotal (I24 / H24)
+'       * 80% cumulative coverage replaces fixed top-3 cap:
+'         contributors are listed (sorted desc by absolute value) until their
+'         running absolute sum >= 80% of Abs(currTotal) / Abs(prevTotal)
+'   - All other logic unchanged from v3
 '=============================================================================
 
 Option Explicit
@@ -654,13 +658,17 @@ NextRow:
 End Sub
 
 '─── BUILD COMMENTARY ──────────────────────────────────────────────────────────
-' Row/col references confirmed by user:
-'   currEOP / prevEOP = row 11, currCol / prevCol  (MoM EOP asset - for EOP paragraph)
-'   YTD avg asset for NII bracket = row 11, col N (CN=14)
-'   currNIM / prevNIM  = row 14, currCol / prevCol (for NIM bps calc and NIM paragraph)
-'   bgtNIM  = row 14, col W (CW=23)
-'   bgtEOP (budget avg asset for NII bracket) = row 11, col W (CW=23)
-'   YTD NII avg asset (shown in NII bracket) = row 11, col N (CN=14)
+' Fixed column sources (v4):
+'   currNIM  = row 14, col N (14)   — current month NIM
+'   currEOP  = row 11, col N (14)   — current month EOP asset balance
+'   prevNIM  = row 14, dynamic prevCol  — previous month NIM for MoM bps calc
+'   prevEOP  = row 11, dynamic prevCol  — previous month EOP for MoM delta
+'   currNonNii = row 24, col I (9)  — current month Non-NII
+'   prevNonNii = row 24, col H (8)  — previous month Non-NII
+'   All YTD figures        = col N (14)
+'   vs Budget $            = col R (18)
+'   vs Budget %            = col S (19)
+'   Budget FY              = col W (23)
 
 Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM As Double) As String
     Dim dashWs As Worksheet
@@ -674,7 +682,8 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim prevMM    As Long:   prevMM    = P2_PrevYYYYMM(yyyymm)
     Dim shortPrev As String: shortPrev = Left(P2_MonthLabel(prevMM), 3)
 
-    ' Find current and previous month columns by scanning row 8 headers
+    ' Dynamic column scan — still needed for prevNIM, prevEOP MoM delta,
+    ' headcount col, and any other dynamic-month references
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
     Dim c As Long
@@ -690,10 +699,12 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim pLbl As String: pLbl = P2_MonthLabel(prevMM)
 
     ' Fixed column indices
-    Const CN As Long = 14   ' Col N = YTD Actual
-    Const CR As Long = 18   ' Col R = vs Budget $
-    Const CS As Long = 19   ' Col S = vs Budget %
-    Const CW As Long = 23   ' Col W = Budget FY
+    Const CN As Long = 14   ' Col N — current month actual / YTD actual
+    Const CH As Long = 8    ' Col H — previous month Non-NII (row 24)
+    Const CI As Long = 9    ' Col I — current month Non-NII (row 24)
+    Const CR As Long = 18   ' Col R — vs Budget $
+    Const CS As Long = 19   ' Col S — vs Budget %
+    Const CW As Long = 23   ' Col W — Budget FY
 
     ' ── YTD P&L ──────────────────────────────────────────────────────────────
     Dim totIncYTD As Double: totIncYTD = P2V(dashWs, 25, CN)
@@ -704,26 +715,25 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim nonNiiYTD As Double: nonNiiYTD = P2V(dashWs, 24, CN)
     Dim nonNiiVsD As Double: nonNiiVsD = P2V(dashWs, 24, CR)
 
-    ' ── NIM: MoM uses currCol/prevCol; budget uses CW ────────────────────────
-    Dim currNIM As Double: currNIM = P2V(dashWs, 14, currCol)  ' row 14 current month col
-    Dim prevNIM As Double: prevNIM = P2V(dashWs, 14, prevCol)  ' row 14 prev month col
-    Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)       ' row 14 budget col W
+    ' ── NIM: current month fixed to col N (14); prev month uses dynamic prevCol
+    Dim currNIM As Double: currNIM = P2V(dashWs, 14, CN)       ' FIX v4: col N row 14
+    Dim prevNIM As Double: prevNIM = P2V(dashWs, 14, prevCol)  ' MoM prev — dynamic
+    Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)
     Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 100)
 
-    ' ── EOP Assets for EOP paragraph (MoM = currCol/prevCol) ─────────────────
-    Dim currEOP As Double: currEOP = P2V(dashWs, 11, currCol)
-    Dim prevEOP As Double: prevEOP = P2V(dashWs, 11, prevCol)
+    ' ── EOP Assets: current month fixed to col N (14); prev month dynamic ─────
+    Dim currEOP As Double: currEOP = P2V(dashWs, 11, CN)       ' FIX v4: col N row 11
+    Dim prevEOP As Double: prevEOP = P2V(dashWs, 11, prevCol)  ' MoM prev — dynamic
     Dim eopMoM  As Double: eopMoM  = currEOP - prevEOP
     Dim eopVsD  As Double: eopVsD  = P2V(dashWs, 11, CR)
 
-    ' ── For NII bracket: YTD avg asset (col N) vs budget (col W) ────────────
-    ' These are the YTD figures shown in the NII sentence, NOT the MoM col
-    Dim ytdEOP  As Double: ytdEOP  = P2V(dashWs, 11, CN)   ' row 11 col N = YTD actual avg asset
-    Dim bgtEOP  As Double: bgtEOP  = P2V(dashWs, 11, CW)   ' row 11 col W = budget avg asset
+    ' ── YTD avg asset and budget (for NII bracket) ────────────────────────────
+    Dim ytdEOP  As Double: ytdEOP  = P2V(dashWs, 11, CN)   ' row 11 col N = YTD actual
+    Dim bgtEOP  As Double: bgtEOP  = P2V(dashWs, 11, CW)   ' row 11 col W = budget
 
-    ' ── Non-NII MoM ──────────────────────────────────────────────────────────
-    Dim currNonNii As Double: currNonNii = P2V(dashWs, 24, currCol)
-    Dim prevNonNii As Double: prevNonNii = P2V(dashWs, 24, prevCol)
+    ' ── Non-NII MoM: col I (9) = current month; col H (8) = previous month ───
+    Dim currNonNii As Double: currNonNii = P2V(dashWs, 24, CI)  ' FIX v4: col I row 24
+    Dim prevNonNii As Double: prevNonNii = P2V(dashWs, 24, CH)  ' FIX v4: col H row 24
     Dim nonNiiMoM  As Double: nonNiiMoM  = currNonNii - prevNonNii
 
     ' ── Cross-selling ─────────────────────────────────────────────────────────
@@ -752,15 +762,15 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         FMS(niiVsBgtD) & ") offset by " & SW(nonNiiVsD) & " non-interest income of " & _
         FMS(nonNiiVsD) & "." & vbNewLine & vbNewLine
 
-    ' Section 2: NII — bracket shows YTD avg asset (col N row 11) vs budget (col W row 11)
-    '            and current month NIM (currCol row 14) vs budget NIM (col W row 14)
+    ' Section 2: NII — bracket shows YTD avg asset (col N row 11) vs budget,
+    '            and current month NIM (col N row 14) vs budget NIM (col W row 14)
     t = t & "NII of " & FM(Abs(niiYTD)) & " was " & FM(Abs(niiVsBgtD)) & " " & _
         AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
         "(" & FB(Abs(ytdEOP)) & " vs " & FB(Abs(bgtEOP)) & " budget) and compressed NIM " & _
         "(" & Format(Abs(currNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
 
-    ' Section 3: NIM MoM — shows prevNIM (prevCol row 14) to currNIM (currCol row 14)
+    ' Section 3: NIM MoM — curr = col N row 14; prev = dynamic prevCol row 14
     t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
         Format(Abs(prevNIM), "0.00") & "% in " & pLbl & " to " & _
         Format(Abs(currNIM), "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
@@ -771,24 +781,26 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     End If
     t = t & vbNewLine & vbNewLine
 
-    ' Section 4: EOP Assets MoM — uses currCol/prevCol row 11
+    ' Section 4: EOP Assets MoM — curr = col N row 11; prev = dynamic prevCol row 11
     t = t & "EOP Asset Balance " & GD(eopMoM) & " " & FM(Abs(eopMoM)) & " MoM to S" & _
         FB(Abs(currEOP)) & ", but remained " & FM(Abs(eopVsD)) & " " & AB(eopVsD) & _
         " budget (budget: " & FB(Abs(bgtEOP)) & ") resulting in a " & _
         IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
-    ' Section 5: Non-NII + fees
-    ' Get fee contributors from PF Fees tab (live pivot in pfWb)
+    ' Section 5: Non-NII MoM — I24 minus H24; display total = I24
+    '            Pass currNonNii (I24) and prevNonNii (H24) as coverage denominators
     Dim feeWs As Worksheet
     On Error Resume Next: Set feeWs = plWs.Parent.Sheets(T_PF_FEES): On Error GoTo 0
-    Dim feeText As String: feeText = P2_GetFeeContributors(feeWs, yyyymm)
+    Dim feeText As String
+    feeText = P2_GetFeeContributors(feeWs, yyyymm, currNonNii, prevNonNii)
 
     t = t & mLbl & " Non-NII " & GD(nonNiiMoM) & " " & FM(Abs(nonNiiMoM)) & _
         " MoM to " & FM(Abs(currNonNii)) & ". Key fee contributors:" & _
-        vbNewLine & vbNewLine   ' blank line after "Key fee contributors:"
-    t = t & feeText             ' feeText already ends with vbNewLine after last fee block
+        vbNewLine & vbNewLine
+    t = t & feeText
 
-    ' Section 6: X-selling — blank line before
+    ' Section 6: X-selling — blank line before (feeText ends with vbNewLine,
+    '            caller adds one more vbNewLine for the blank separator)
     t = t & vbNewLine & _
         "YTD " & mLbl & " X-selling Income of " & FM(Abs(xsellYTD)) & _
         " is mainly derived from:" & vbNewLine
@@ -921,8 +933,6 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
     On Error GoTo 0
 
     ' 6. Hide tabs — all in one consolidated list
-    '    T_WORKING is explicitly included here (was the bug — Set ws = Nothing
-    '    was resetting ws before the hide completed in the old separate arrays)
     Dim hideList As Variant
     hideList = Array( _
         T_PL_PF, _
@@ -940,7 +950,6 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
         On Error Resume Next
         Dim wsH As Worksheet: Set wsH = sentWb.Sheets(tabName)
         If Not wsH Is Nothing Then
-            ' Don't hide if it's the active sheet (safety guard)
             If wsH.Name <> sentWb.ActiveSheet.Name Then
                 wsH.Visible = xlSheetHidden
             End If
@@ -1021,34 +1030,33 @@ ErrH:
 End Sub
 
 '─── FEE CONTRIBUTORS FROM PF FEES TAB ────────────────────────────────────────
-' HOW CASELIST FOUND YYYYMM: it called CurrentRegion.Value into a Variant array,
-' so all pivot header values came through as their true VBA type (Long 202504).
-' This function now does the same: read the pivot region into an array first,
-' then scan row 2 (pivot grand-header row after DeleteTop3 would make it row 2,
-' but here we are reading the LIVE pivot in pfWb BEFORE CreateSentFile runs,
-' so the pivot still has its original structure).
+' v4 CHANGES:
+'   - Signature: added currTotal (= dashboard I24) and prevTotal (= dashboard H24)
+'     as the denominators for 80% cumulative coverage calculation.
+'   - Coverage logic: contributors are listed in descending absolute value order
+'     until their running sum of absolute values >= 80% of Abs(currTotal) for the
+'     current month block, and >= 80% of Abs(prevTotal) for the previous month
+'     block.  If the total passed in is zero, falls back to listing all entries.
+'   - All scanning / logging / fallback logic is unchanged from v3.
 '
-' Strategy (matching caselist exactly):
-'   1. Read feeWs.UsedRange into a Variant array
-'   2. Scan ALL rows of that array (not just 1-20) for a cell whose value,
-'      when coerced to Long via CStr→CLng, equals yyyymm or prevMM
-'   3. Log everything found so mismatches are visible in the Log sheet
-'   4. Once hdRow/currCol/prevCol known, collect customer (col 2) + fee values
-'   5. Sort descending, emit top-3 curr + top-3 prev with blank lines between
-'
-' Output format (with blank lines as requested):
-'   Key fee contributors:
-'   [blank]
+' Output format:
 '   Major Apr 26 Fees:
+'   [blank line]
 '   1) Customer A $x.xm
-'   2) ...
-'   [blank]
+'   2) Customer B $x.xm
+'   [blank line]
 '   Major Mar 26 Fees:
-'   1) Customer B $x.xm
-'   [blank]
-'   YTD Apr 26 X-selling...   ← blank line inserted by caller
+'   [blank line]
+'   1) Customer C $x.xm
+'   [blank line]
+'   ← caller adds vbNewLine before "YTD X-selling" line
 
-Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As String
+Private Function P2_GetFeeContributors( _
+        feeWs As Worksheet, _
+        yyyymm As Long, _
+        currTotal As Double, _
+        prevTotal As Double) As String
+
     On Error GoTo ErrH
 
     If feeWs Is Nothing Then
@@ -1061,7 +1069,7 @@ Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As St
     Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
     Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
 
-    ' ── Read entire used range into array (same approach as caselist) ──────────
+    ' ── Read entire used range into array ─────────────────────────────────────
     Dim pvData As Variant
     pvData = feeWs.UsedRange.Value   ' 1-based 2D array, preserves true VBA types
 
@@ -1071,12 +1079,6 @@ Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As St
     P2Log "PF Fees Search", "INFO", "UsedRange array: " & nRows & " rows x " & nCols & " cols"
 
     ' ── Scan ALL rows for YYYYMM header ───────────────────────────────────────
-    ' Match logic (same as caselist GetMomContributors):
-    '   IsNumeric(v) AND CLng(v) = yyyymm  →  direct integer match
-    '   CStr(v) = CStr(yyyymm)             →  text match (e.g. "202504")
-    '   IsNumeric(v) AND it's a date serial →  convert Year*100+Month
-    ' Log every candidate so user can see what's in the pivot header rows.
-
     Dim hdRow   As Long: hdRow   = 0
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
@@ -1133,8 +1135,8 @@ NextArrCell:
 
     P2Log "PF Fees Search", "INFO", diagLog
 
+    ' ── Fallback: raw CStr scan on rows 1-10 ──────────────────────────────────
     If currCol = 0 Then
-        ' Last-resort: try raw CStr comparison on every cell in rows 1-10
         Dim yyyymmStr As String: yyyymmStr = CStr(yyyymm)
         Dim prevMMStr As String: prevMMStr = CStr(prevMM)
         For r = 1 To Application.Min(10, nRows)
@@ -1168,12 +1170,11 @@ NextArrCell:
           " (" & yyyymm & ") prevCol=" & prevCol & " (" & prevMM & ")"
 
     ' ── Collect customer names and fee values from array ──────────────────────
-    ' Customer name: column 2. Skip blank, "total", "grand total" rows.
+    ' Customer name from column 2; skip blank / total / grand total rows
     Dim cNames() As String, cVals() As Double, cCnt As Long: cCnt = 0
     Dim pNames() As String, pVals() As Double, pCnt As Long: pCnt = 0
 
     For r = hdRow + 1 To nRows
-        ' Customer name from col 2 (or col 1 fallback)
         Dim custN As String
         custN = Trim(CStr(pvData(r, 2)))
         If custN = "" And nCols >= 1 Then custN = Trim(CStr(pvData(r, 1)))
@@ -1181,7 +1182,7 @@ NextArrCell:
         If InStr(1, LCase(custN), "total") > 0 Then GoTo NextFeeRow
         If InStr(1, LCase(custN), "grand") > 0 Then GoTo NextFeeRow
 
-        ' Current month value
+        ' Current month
         Dim cVal As Double: cVal = 0
         If IsNumeric(pvData(r, currCol)) And Not IsEmpty(pvData(r, currCol)) Then
             cVal = CDbl(pvData(r, currCol))
@@ -1192,7 +1193,7 @@ NextArrCell:
             cNames(cCnt) = custN: cVals(cCnt) = cVal
         End If
 
-        ' Previous month value
+        ' Previous month
         If prevCol > 0 Then
             Dim pVal As Double: pVal = 0
             If IsNumeric(pvData(r, prevCol)) And Not IsEmpty(pvData(r, prevCol)) Then
@@ -1212,7 +1213,7 @@ NextFeeRow:
           "Data rows scanned: " & hdRow + 1 & " to " & nRows & _
           ". Curr entries=" & cCnt & " Prev entries=" & pCnt
 
-    ' ── Sort both arrays descending by absolute value ─────────────────────────
+    ' ── Sort both arrays descending by absolute value (bubble sort) ───────────
     Dim ii As Long, jj As Long, tn As String, tv As Double
     If cCnt > 1 Then
         For ii = 1 To cCnt - 1
@@ -1237,48 +1238,64 @@ NextFeeRow:
         Next ii
     End If
 
-    ' ── Build result with spacing as requested ────────────────────────────────
-    ' Format (blank lines inserted as vbNewLine):
-    '   Major Apr 26 Fees:
-    '   [blank line]
-    '   1) Customer $xm
-    '   2) ...
-    '   [blank line]
-    '   Major Mar 26 Fees:
-    '   [blank line]
-    '   1) Customer $xm
-    '   [blank line]
-    '   ← caller adds "YTD ... X-selling" after this
+    ' ── 80% coverage threshold ────────────────────────────────────────────────
+    ' Use Abs(currTotal) / Abs(prevTotal) as denominator.
+    ' If the passed-in total is zero (e.g. cell was empty), fall back to sum of
+    ' all collected entries so that all contributors are shown rather than none.
+    Dim cDenom As Double: cDenom = Abs(currTotal)
+    If cDenom = 0 Then
+        Dim ci2 As Long
+        For ci2 = 1 To cCnt: cDenom = cDenom + Abs(cVals(ci2)): Next ci2
+    End If
 
+    Dim pDenom As Double: pDenom = Abs(prevTotal)
+    If pDenom = 0 Then
+        Dim pi2 As Long
+        For pi2 = 1 To pCnt: pDenom = pDenom + Abs(pVals(pi2)): Next pi2
+    End If
+
+    Const COVERAGE_PCT As Double = 0.8   ' 80%
+
+    ' ── Build result ──────────────────────────────────────────────────────────
     Dim result As String
 
-    ' Current month fees
+    ' Current month fees — list until 80% of cDenom covered
     result = "Major " & currLbl & " Fees:" & vbNewLine & vbNewLine
-    Dim maxC As Long: maxC = Application.Min(3, cCnt)
-    If maxC = 0 Then
+    If cCnt = 0 Then
         result = result & "[No fee entries found for " & currLbl & "]" & vbNewLine
     Else
-        For ii = 1 To maxC
+        Dim cRunning As Double: cRunning = 0
+        For ii = 1 To cCnt
             result = result & ii & ") " & cNames(ii) & " $" & _
                      Format(Abs(cVals(ii)) / 1000000, "0.0") & "m" & vbNewLine
+            cRunning = cRunning + Abs(cVals(ii))
+            If cDenom > 0 And (cRunning / cDenom) >= COVERAGE_PCT Then Exit For
         Next ii
     End If
 
-    ' Previous month fees (only if found)
+    ' Previous month fees — list until 80% of pDenom covered
     If prevCol > 0 Then
         result = result & vbNewLine & "Major " & prevLbl & " Fees:" & vbNewLine & vbNewLine
-        Dim maxP As Long: maxP = Application.Min(3, pCnt)
-        If maxP = 0 Then
+        If pCnt = 0 Then
             result = result & "[No fee entries found for " & prevLbl & "]" & vbNewLine
         Else
-            For ii = 1 To maxP
+            Dim pRunning As Double: pRunning = 0
+            For ii = 1 To pCnt
                 result = result & ii & ") " & pNames(ii) & " $" & _
                          Format(Abs(pVals(ii)) / 1000000, "0.0") & "m" & vbNewLine
+                pRunning = pRunning + Abs(pVals(ii))
+                If pDenom > 0 And (pRunning / pDenom) >= COVERAGE_PCT Then Exit For
             Next ii
         End If
     End If
-    ' Trailing blank line — caller's vbNewLine before "YTD X-selling" adds second blank
+
+    ' Trailing blank line — caller's vbNewLine before "YTD X-selling" adds the
+    ' blank separator between fee block and cross-selling section
     result = result & vbNewLine
+
+    P2Log "PF Fees Search", "OK", _
+          "Fee contributors written. Curr covered=" & Format(IIf(cDenom > 0, cRunning / cDenom, 0), "0%") & _
+          " Prev covered=" & Format(IIf(pDenom > 0, pRunning / pDenom, 0), "0%")
 
     P2_GetFeeContributors = result
     Exit Function
@@ -1287,7 +1304,7 @@ ErrH:
 End Function
 
 '─── FORMAT SENT TABS ──────────────────────────────────────────────────────────
-' FIX v3: Number format changed from #,##0.000 → #,##0.00 (2 decimal places)
+' v3 FIX retained: Number format #,##0.00 (2 decimal places)
 
 Private Sub P2_FormatSentTab(wb As Workbook, tabName As String)
     On Error Resume Next
@@ -1339,7 +1356,7 @@ Private Sub P2_FormatSentTab(wb As Workbook, tabName As String)
         If ws.Columns(c).ColumnWidth < 12 Then ws.Columns(c).ColumnWidth = 12
     Next c
 
-    ' ── FIX: 2 decimal places (was 3) ─────────────────────────────────────────
+    ' 2 decimal places
     Dim numRng As Range
     On Error Resume Next
     Set numRng = ws.Range(ws.Cells(3, 4), ws.Cells(lastRow, lastCol))
