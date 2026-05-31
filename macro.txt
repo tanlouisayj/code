@@ -236,7 +236,24 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
     Application.DisplayAlerts = False
     Application.ScreenUpdating = False
 
-    Dim pfWb  As Workbook
+    ' Add NEW RUN separator to log
+    Dim logWs As Worksheet
+    On Error Resume Next: Set logWs = ThisWorkbook.Sheets("Log"): On Error GoTo 0
+    If logWs Is Nothing Then
+        Set logWs = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        logWs.Name = "Log"
+        logWs.Cells(1, 1).Value = "Timestamp":  logWs.Cells(1, 2).Value = "Source"
+        logWs.Cells(1, 3).Value = "Step":       logWs.Cells(1, 4).Value = "Status"
+        logWs.Cells(1, 5).Value = "Message"
+        logWs.Rows(1).Font.Bold = True
+    End If
+    Dim sepRow As Long: sepRow = logWs.Cells(logWs.Rows.Count, 1).End(xlUp).Row + 1
+    logWs.Cells(sepRow, 1).Value = "── PART2 RUN ──"
+    logWs.Cells(sepRow, 2).Value = yyyymm
+    logWs.Cells(sepRow, 1).Font.Bold = True
+    logWs.Cells(sepRow, 1).Interior.Color = RGB(180, 220, 180)
+    logWs.Cells(sepRow, 2).Interior.Color = RGB(180, 220, 180)
+    logWs.Activate
     Dim qsWb  As Workbook
 
     On Error GoTo PipelineError2
@@ -359,8 +376,12 @@ PipelineError2:
     Dim en As Long: en = Err.Number
     Dim ed As String: ed = Err.Description
     On Error Resume Next
-    If Not pfWb Is Nothing Then pfWb.Close False
-    If Not qsWb Is Nothing Then qsWb.Close False
+    If Not pfWb Is Nothing Then
+        If pfWb.Name <> "" Then pfWb.Close False
+    End If
+    If Not qsWb Is Nothing Then
+        If qsWb.Name <> "" Then qsWb.Close False
+    End If
     On Error GoTo 0
     P2Log "PIPELINE ERROR", "ERROR", "Error " & en & ": " & ed
     Application.DisplayAlerts = True
@@ -869,22 +890,45 @@ End Sub
 '─── LOG ───────────────────────────────────────────────────────────────────────
 
 Private Sub P2Log(stepName As String, status As String, msg As String)
+    ' Auto-create Log sheet if it doesn't exist
+    Dim ws As Worksheet
     On Error Resume Next
-    Dim ws As Worksheet: Set ws = ThisWorkbook.Sheets("Log"): On Error GoTo 0
-    If ws Is Nothing Then Exit Sub
+    Set ws = ThisWorkbook.Sheets("Log")
+    On Error GoTo 0
+
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Sheets.Add(After:=ThisWorkbook.Sheets(ThisWorkbook.Sheets.Count))
+        ws.Name = "Log"
+        ws.Cells(1, 1).Value = "Timestamp":  ws.Cells(1, 2).Value = "Source"
+        ws.Cells(1, 3).Value = "Step":       ws.Cells(1, 4).Value = "Status"
+        ws.Cells(1, 5).Value = "Message"
+        ws.Rows(1).Font.Bold = True
+        ws.Columns("A").ColumnWidth = 22: ws.Columns("B").ColumnWidth = 8
+        ws.Columns("C").ColumnWidth = 30: ws.Columns("D").ColumnWidth = 10
+        ws.Columns("E").ColumnWidth = 80
+    End If
+
+    ' Switch to log so user can watch progress
+    ws.Activate
+
     Dim nr As Long: nr = ws.Cells(ws.Rows.Count, 1).End(xlUp).Row + 1
     ws.Cells(nr, 1).Value = Format(Now, "DD/MM/YYYY HH:MM:SS")
     ws.Cells(nr, 2).Value = "Part2"
     ws.Cells(nr, 3).Value = stepName
     ws.Cells(nr, 4).Value = status
     ws.Cells(nr, 5).Value = msg
+
     Select Case UCase(status)
         Case "RUNNING": ws.Cells(nr, 4).Interior.Color = RGB(255, 255, 180)
         Case "OK":      ws.Cells(nr, 4).Interior.Color = RGB(180, 255, 180)
         Case "ERROR":   ws.Cells(nr, 4).Interior.Color = RGB(255, 180, 180)
         Case "INFO":    ws.Cells(nr, 4).Interior.Color = RGB(180, 220, 255)
     End Select
-    Application.ScreenUpdating = True: DoEvents
+
+    ' Scroll to latest row
+    ws.Cells(nr, 1).Select
+    Application.ScreenUpdating = True
+    DoEvents
 End Sub
 
 '─── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
