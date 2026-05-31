@@ -647,124 +647,98 @@ End Function
 
 Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Dim mo      As Long:   mo      = yyyymm Mod 100
-    Dim yr2     As String: yr2     = Right(CStr(yyyymm \ 100), 2)    ' "26"
+    Dim yr2     As String: yr2     = Right(CStr(yyyymm \ 100), 2)
     Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
-    Dim shortMo As String: shortMo = Left(currLbl, 3)                ' "Apr"
+    Dim shortMo As String: shortMo = Left(currLbl, 3)
 
-    ' ── Find currCol: scan row 8 for current month header ─────────────────────
+    ' Declare month name array at top of sub — illegal inside a For loop in VBA
+    Dim mNames(1 To 12) As String
+    mNames(1)="Jan": mNames(2)="Feb":  mNames(3)="Mar":  mNames(4)="Apr"
+    mNames(5)="May": mNames(6)="Jun":  mNames(7)="Jul":  mNames(8)="Aug"
+    mNames(9)="Sep": mNames(10)="Oct": mNames(11)="Nov": mNames(12)="Dec"
+
+    ' ── Find currCol: scan row 8 for FIRST match of shortMo ──────────────────
+    ' Exit For on first hit — prevents landing on a later YTD/budget col that
+    ' also contains the month name (was causing currCol=50).
     Dim currCol As Long: currCol = 0
     Dim c As Long
-    For c = 1 To 50
+    For c = 1 To 30
         Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
-        If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then currCol = c
+        If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then
+            currCol = c
+            Exit For
+        End If
     Next c
     If currCol = 0 Then currCol = 5 + mo
     P2Log "Direct Cost Links", "INFO", "currCol=" & currCol & " (" & shortMo & " " & yr2 & ")"
 
-    ' ── Find a template formula: scan row 29 left-to-right for any valid "='" ──
-    ' Also record which column it came from and what month row 8 says it belongs to
-    Dim tmplF      As String: tmplF      = ""
-    Dim tmplCol    As Long:   tmplCol    = 0
-    Dim tmplMonth  As String: tmplMonth  = ""   ' 3-letter e.g. "Mar"
-    Dim tmplYr2    As String: tmplYr2    = ""   ' 2-digit e.g. "26"
+    ' ── Find template: last valid external-link formula in row 29, col 1..currCol
+    Dim tmplF     As String: tmplF     = ""
+    Dim tmplCol   As Long:   tmplCol   = 0
+    Dim tmplMonth As String: tmplMonth = ""
+    Dim tmplYr2   As String: tmplYr2   = ""
+    Dim mi As Long, yp As Long, h8 As String, f As String
 
-    For c = 1 To currCol   ' only look at columns up to and including currCol
-        Dim f As String: f = ""
-        On Error Resume Next
-        f = plWs.Cells(29, c).Formula
-        On Error GoTo 0
-        ' Valid external-link formula starts with =' and contains [
+    For c = 1 To currCol
+        f = ""
+        On Error Resume Next: f = plWs.Cells(29, c).Formula: On Error GoTo 0
         If Left(f, 2) = "='" And InStr(f, "[") > 0 Then
             tmplF   = f
             tmplCol = c
-            ' Find out which month this column represents from row 8
-            Dim h8 As String: h8 = Trim(CStr(plWs.Cells(8, c).Value))
-            ' Extract 3-letter month and 2-digit year from header (e.g. "Mar 26")
-            Dim mi As Long
-            Dim mNames(1 To 12) As String
-            mNames(1)="Jan": mNames(2)="Feb":  mNames(3)="Mar":  mNames(4)="Apr"
-            mNames(5)="May": mNames(6)="Jun":  mNames(7)="Jul":  mNames(8)="Aug"
-            mNames(9)="Sep": mNames(10)="Oct": mNames(11)="Nov": mNames(12)="Dec"
+            h8 = Trim(CStr(plWs.Cells(8, c).Value))
+            tmplMonth = ""
             For mi = 1 To 12
                 If InStr(1, h8, mNames(mi), vbTextCompare) > 0 Then
-                    tmplMonth = mNames(mi)
-                    Exit For
+                    tmplMonth = mNames(mi): Exit For
                 End If
             Next mi
-            ' Extract 2-digit year from header
-            Dim yp As Long
+            tmplYr2 = ""
             For yp = 1 To Len(h8) - 1
                 If IsNumeric(Mid(h8, yp, 2)) And CLng(Mid(h8, yp, 2)) >= 20 Then
-                    tmplYr2 = Mid(h8, yp, 2)
-                    Exit For
+                    tmplYr2 = Mid(h8, yp, 2): Exit For
                 End If
             Next yp
         End If
     Next c
 
     If tmplF = "" Then
-        ' Last resort: try reading ANY cell in row 29 columns 1-30
-        For c = 1 To 30
-            Dim ff As String: ff = ""
-            On Error Resume Next: ff = plWs.Cells(29, c).Formula: On Error GoTo 0
-            If Left(ff, 2) = "='" And InStr(ff, "[") > 0 Then
-                tmplF = ff: tmplCol = c: Exit For
-            End If
-        Next c
-    End If
-
-    If tmplF = "" Then
         P2Log "Direct Cost Links", "INFO", _
-              "No external-link template found in row 29. Cannot build formulas for rows 29-30."
+              "No external-link template found in row 29 cols 1-" & currCol & ". Cannot write formulas."
         Exit Sub
     End If
 
     P2Log "Direct Cost Links", "INFO", _
-          "Template from col " & tmplCol & " (" & tmplMonth & " " & tmplYr2 & "): " & Left(tmplF, 80)
+          "Template col " & tmplCol & " (" & tmplMonth & " " & tmplYr2 & "): " & Left(tmplF, 80)
 
-    ' ── Calculate how many months to advance from template to current ──────────
-    ' colOffset = currCol - tmplCol  (same offset applies to the external file column)
     Dim colOffset As Long: colOffset = currCol - tmplCol
 
-    ' ── Suppress link dialogs ─────────────────────────────────────────────────
     Dim savedAlerts As Boolean: savedAlerts = Application.DisplayAlerts
     Dim savedAsk    As Boolean: savedAsk    = Application.AskToUpdateLinks
     Application.DisplayAlerts   = False
     Application.AskToUpdateLinks = False
 
-    ' ── Build and write for rows 29 and 30 ────────────────────────────────────
-    Dim r As Long
+    Dim r As Long, rowTmpl As String, newF As String, wErr As Long
     For r = 29 To 30
-        ' Get the template for this row (row 29 template found above; re-read for row 30)
-        Dim rowTmpl As String: rowTmpl = ""
+        rowTmpl = ""
         If r = 29 Then
             rowTmpl = tmplF
         Else
-            On Error Resume Next
-            rowTmpl = plWs.Cells(30, tmplCol).Formula
-            On Error GoTo 0
-            If Left(rowTmpl, 2) <> "='" Then rowTmpl = tmplF  ' fall back to row 29 template
+            On Error Resume Next: rowTmpl = plWs.Cells(30, tmplCol).Formula: On Error GoTo 0
+            If Left(rowTmpl, 2) <> "='" Then rowTmpl = tmplF
         End If
 
-        ' Replace month label in filename: tmplMonth tmplYr2 → shortMo yr2
-        Dim newF As String: newF = rowTmpl
+        newF = rowTmpl
         If tmplMonth <> "" And tmplYr2 <> "" Then
             newF = Replace(newF, tmplMonth & " " & tmplYr2, shortMo & " " & yr2)
         End If
-
-        ' Advance the $COL$ reference after "!" by colOffset steps
         newF = P2_AdvanceExtColByN(newF, colOffset)
 
-        ' Write
-        On Error Resume Next
-        plWs.Cells(r, currCol).Formula = newF
-        Dim wErr As Long: wErr = Err.Number
-        On Error GoTo 0
-
+        wErr = 0
+        On Error Resume Next: plWs.Cells(r, currCol).Formula = newF: wErr = Err.Number: On Error GoTo 0
         If wErr <> 0 Then
             P2Log "Direct Cost Links", "INFO", "Row " & r & " write error " & wErr & ": " & Left(newF, 100)
         Else
-            P2Log "Direct Cost Links", "OK", "Row " & r & " col " & currCol & ": " & Left(newF, 100)
+            P2Log "Direct Cost Links", "OK",  "Row " & r & " col " & currCol & ": " & Left(newF, 100)
         End If
     Next r
 
