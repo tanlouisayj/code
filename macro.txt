@@ -32,7 +32,7 @@ Const P2_EMAIL_TO_CELL  As String = "B38"
 Const P2_EMAIL_CC_CELL  As String = "B39"
 Const P2_GREETING_CELL  As String = "B40"
 Const P2_YOUR_NAME_CELL As String = "B41"
-Const P2_NIM_RANGE_CELL As String = "B42"  ' e.g. "298:320"
+Const P2_NIM_RANGE_CELL As String = "B42"  ' e.g. "330:348" — LCIN adjustment rows
 Const P2_NIM_DATA_CELL  As String = "B43"  ' e.g. "35:291" SUMIF lookup range
 
 '─── TAB NAME CONSTANTS ────────────────────────────────────────────────────────
@@ -511,22 +511,50 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
     ' Days in reporting month — correct per month, handles leap years
     Dim daysInMo As Long: daysInMo = P2_DaysInMonth(yyyymm)
 
-    ' Find NIM % cell — search rows 228-245 in NII column for existing formula or NIM-range value
+    ' Find NIM % cell — search for yellow highlighted cell in NII column
+    ' Pivot currently ends ~291, NIM % cell shifted to row 350
+    ' Search 340-380 to give room for pivot growth
     Dim nimPctRow As Long: nimPctRow = 0
     Dim nimPctCol As Long: nimPctCol = colNII
-    Dim v As Variant
-    For r = 228 To 245
-        v = ws.Cells(r, nimPctCol).Value
-        If ws.Cells(r, nimPctCol).HasFormula Then
+    Dim r As Long
+
+    ' Method 1: find by yellow fill colour
+    For r = 340 To 380
+        If ws.Cells(r, nimPctCol).Interior.Color = RGB(255, 255, 0) Or _
+           ws.Cells(r, nimPctCol).Interior.Color = RGB(255, 255, 180) Or _
+           ws.Cells(r, nimPctCol).Interior.ColorIndex = 6 Or _
+           ws.Cells(r, nimPctCol).Interior.ColorIndex = 36 Then
             nimPctRow = r: Exit For
         End If
-        If IsNumeric(v) Then
-            If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
+    Next r
+
+    ' Method 2: find existing formula in range
+    If nimPctRow = 0 Then
+        For r = 340 To 380
+            If ws.Cells(r, nimPctCol).HasFormula Then
                 nimPctRow = r: Exit For
             End If
-        End If
-    Next r
-    If nimPctRow = 0 Then nimPctRow = 233  ' default fallback
+        Next r
+    End If
+
+    ' Method 3: find NIM-range value (0.3% to 3%)
+    If nimPctRow = 0 Then
+        Dim v As Variant
+        For r = 340 To 380
+            v = ws.Cells(r, nimPctCol).Value
+            If IsNumeric(v) Then
+                If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
+                    nimPctRow = r: Exit For
+                End If
+            End If
+        Next r
+    End If
+
+    ' Fallback: use row 350
+    If nimPctRow = 0 Then
+        nimPctRow = 350
+        P2Log "Normalised NIM %", "INFO", "NIM % cell not found in rows 340-380 — using row 350."
+    End If
 
     ' Build formula:
     ' = (SUM(adjustmentRows + GrandTotal NII) / daysInMonth * 365) / GrandTotal AvgAsset
