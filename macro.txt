@@ -671,7 +671,11 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Dim r As Long
     For r = 29 To 30
         Dim prevF As String: prevF = plWs.Cells(r, prevCol).Formula
-        If prevF = "" Or prevF = "0" Then GoTo NextRow
+        If prevF = "" Or prevF = "0" Then
+            P2Log "Direct Cost Links", "INFO", _
+                  "Row " & r & " col " & prevCol & " is empty/zero — nothing to copy."
+            GoTo NextRow
+        End If
 
         ' Advance every column-letter reference in the formula by +1 (Z→AA etc.)
         Dim newF As String
@@ -681,13 +685,10 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
         newF = Replace(newF, shortPrev & " 26", shortMo & " 26")
         newF = Replace(newF, " " & shortPrev & " ", " " & shortMo & " ")
 
-        ' Write to currCol only if it doesn't already reference the current month
-        If plWs.Cells(r, currCol).Formula = "" Or _
-           InStr(1, plWs.Cells(r, currCol).Formula, shortMo, vbTextCompare) = 0 Then
-            plWs.Cells(r, currCol).Formula = newF
-            P2Log "Direct Cost Links", "INFO", _
-                  "Row " & r & " col " & currCol & " written. Formula: " & Left(newF, 80)
-        End If
+        ' Always overwrite — copy prevCol formula to currCol unconditionally
+        plWs.Cells(r, currCol).Formula = newF
+        P2Log "Direct Cost Links", "INFO", _
+              "Row " & r & " col " & currCol & " written. Formula: " & Left(newF, 80)
 
 NextRow:
     Next r
