@@ -820,14 +820,20 @@ End Sub
 '─── CREATE SENT FILE ──────────────────────────────────────────────────────────
 
 Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As String)
-    ' Copy working file
-    pfWb.SaveCopyAs sentPath
+    ' Save copy as xlsm first (must match working file format)
+    Dim tempPath As String
+    tempPath = Left(sentPath, Len(sentPath) - 5) & "_temp.xlsm"
+    pfWb.SaveCopyAs tempPath
 
+    ' Open the xlsm temp copy
     Dim sentWb As Workbook
     On Error Resume Next
-    Set sentWb = Workbooks.Open(sentPath)
+    Set sentWb = Workbooks.Open(tempPath)
     On Error GoTo 0
-    If sentWb Is Nothing Then Exit Sub
+    If sentWb Is Nothing Then
+        On Error Resume Next: Kill tempPath: On Error GoTo 0
+        Exit Sub
+    End If
 
     Application.ScreenUpdating = False
 
@@ -880,11 +886,12 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
     sentWb.Sheets(T_PL_DASH).Activate
     On Error GoTo 0
 
-    ' 6. Save as xlsx (strips macros)
+    ' 6. Save as xlsx (strips macros) and delete temp xlsm
     Application.DisplayAlerts = False
     On Error Resume Next
     sentWb.SaveAs sentPath, xlOpenXMLWorkbook
     sentWb.Close
+    Kill tempPath  ' remove temp xlsm
     On Error GoTo 0
     Application.DisplayAlerts = True
 End Sub
