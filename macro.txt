@@ -791,61 +791,59 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim hcBgt As Long: hcBgt = CLng(P2V(dashWs, 68, 15))
     Dim hcVsBgt As Long: hcVsBgt = hc - hcBgt
 
-    ' Build commentary
-    Dim t As String
-
     ' YTD vs Budget
+    Dim t As String
     t = "YTD Act Vs Budget" & vbNewLine
-    t = t & "YTD " & mLbl & " Total Income of S$" & FM(Abs(totIncYTD)) & " was $" & _
+    t = t & "YTD " & mLbl & " Total Income of S" & FM(Abs(totIncYTD)) & " was " & _
         FM(Abs(totVsBgtD)) & " (" & Format(Abs(totVsBgtP) * 100, "0") & "%) " & _
         AB(totVsBgtD) & " budget, driven primarily by " & SW(niiVsBgtD) & " NII (" & _
         FMS(niiVsBgtD) & ") offset by " & SW(nonNiiVsD) & " non-interest income of " & _
         FMS(nonNiiVsD) & "." & vbNewLine & vbNewLine
 
     ' NII
-    t = t & "NII of " & FM(Abs(niiYTD)) & " was $" & FM(Abs(niiVsBgtD)) & " " & _
+    t = t & "NII of " & FM(Abs(niiYTD)) & " was " & FM(Abs(niiVsBgtD)) & " " & _
         AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
-        "($" & FB(Abs(currEOP)) & "bn vs $" & FB(Abs(bgtEOP)) & "bn budget) and compressed NIM " & _
+        "(" & FB(Abs(currEOP)) & " vs " & FB(Abs(bgtEOP)) & " budget) and compressed NIM " & _
         "(" & Format(Abs(currNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
 
-    ' NIM — display as-is, NIM is already in % form (1.22 not 0.0122)
+    ' NIM
     t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
         Format(Abs(prevNIM), "0.00") & "% in " & pLbl & " to " & _
         Format(Abs(currNIM), "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
     If normNIM > 0 Then
-        ' normNIM from NIM tab is a decimal (0.0126) — convert to display %
         Dim normNIMDisplay As Double
-        normNIMDisplay = IIf(normNIM < 0.1, normNIM * 100, normNIM)  ' handle both formats
+        normNIMDisplay = IIf(normNIM < 0.1, normNIM * 100, normNIM)
         t = t & "Normalised NIM maintains at " & Format(normNIMDisplay, "0.00") & "%."
     End If
     t = t & vbNewLine & vbNewLine
 
     ' EOP Assets
-    t = t & "EOP Asset Balance " & GD(eopMoM) & " $" & FB(Abs(eopMoM)) & " MoM to S$" & _
-        FB(Abs(currEOP)) & ", but remained $" & FB(Abs(eopVsD)) & " " & AB(eopVsD) & _
-        " budget (budget: $" & FB(Abs(bgtEOP)) & ") resulting in a " & _
+    t = t & "EOP Asset Balance " & GD(eopMoM) & " " & FM(Abs(eopMoM)) & " MoM to S" & _
+        FB(Abs(currEOP)) & ", but remained " & FM(Abs(eopVsD)) & " " & AB(eopVsD) & _
+        " budget (budget: " & FB(Abs(bgtEOP)) & ") resulting in a " & _
         IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
-    ' Non-NII and Fees — pull top contributors from PF Fees tab
+    ' Non-NII and Fees
     Dim feeWs As Worksheet
     On Error Resume Next: Set feeWs = plWs.Parent.Sheets(T_PF_FEES): On Error GoTo 0
     Dim feeText As String: feeText = P2_GetFeeContributors(feeWs, yyyymm)
 
-    t = t & mLbl & " Non-NII " & ID(CLng(nonNiiMoM * 10)) & " $" & FM(Abs(nonNiiMoM)) & _
-        " MoM to $" & FM(Abs(currNonNii)) & "." & vbNewLine
+    t = t & mLbl & " Non-NII " & GD(nonNiiMoM) & " " & FM(Abs(nonNiiMoM)) & _
+        " MoM to " & FM(Abs(currNonNii)) & ". Key fee contributors:" & vbNewLine
     t = t & feeText & vbNewLine
 
     ' X-selling
-    t = t & "YTD " & mLbl & " X-selling Income of $" & FM(Abs(xsellYTD)) & _
+    t = t & "YTD " & mLbl & " X-selling Income of " & FM(Abs(xsellYTD)) & _
         " is mainly derived from:" & vbNewLine
-    t = t & "- Cash +" & FM(Abs(cashYTD)) & vbNewLine
-    t = t & "- GFM Sales $" & FM(Abs(gfmYTD)) & "; and" & vbNewLine
-    t = t & "- Trade +" & FM(Abs(tradeYTD)) & vbNewLine & vbNewLine
+    t = t & "- Cash +" & Format(Abs(cashYTD), "0.0") & "m" & vbNewLine
+    t = t & "- GFM Sales $" & Format(Abs(gfmYTD), "0.0") & "m; and" & vbNewLine
+    t = t & "- Trade +" & Format(Abs(tradeYTD), "0.0") & "m" & vbNewLine & vbNewLine
 
     ' Direct Expense
-    t = t & "YTD " & mLbl & " Direct Expense of $" & FM(Abs(dirExpYTD)) & " was $" & _
-        FM(Abs(dirExpVsD)) & " " & AB(dirExpVsD) & " budget." & vbNewLine & vbNewLine
+    t = t & "YTD " & mLbl & " Direct Expense of " & FM(Abs(dirExpYTD)) & _
+        " was " & FM(Abs(dirExpVsD)) & " " & AB(dirExpVsD) & " budget." & _
+        vbNewLine & vbNewLine
 
     ' Headcount
     t = t & mLbl & " Regional Headcount remained at " & hc & _
@@ -1051,22 +1049,11 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
 
     Dim mLbl As String: mLbl = P2_MonthLabel(yyyymm)
 
-
-    ' Build HTML body
-    Dim imgTag As String: imgTag = ""
-    If imgOK And Dir(imgPath) <> "" Then
-        imgTag = "<p><i>Dashboard snapshot attached: PF_Dashboard_" & yyyymm & ".png</i></p>"
-    End If
-
-    Dim htmlComm As String
-    htmlComm = Replace(Replace(commentary, "&", "&amp;"), vbNewLine, "<br>")
-
     Dim html As String
     html = "<html><body style='font-family:Calibri;font-size:11pt;'>" & _
            "<p>Hi " & P2_Greeting() & ",</p>" & _
            "<p>Attached Project Finance " & mLbl & " Financials for your information.</p>" & _
-           imgTag & "<br>" & _
-           "<p>" & htmlComm & "</p>" & _
+           "<p>[UPDATE: Paste finalised commentary here before sending]</p>" & _
            "<p>Please let me know if you have any questions or require further information.</p>" & _
            "<p>Regards,<br>" & P2_YourName() & "</p>" & _
            "</body></html>"
@@ -1075,21 +1062,17 @@ Private Sub P2_SendEmail(sentPath As String, imgPath As String, imgOK As Boolean
         .To      = P2_EmailTo()
         .CC      = P2_EmailCC()
         .Subject = mLbl & " PF Financials"
-        .Attachments.Add sentPath
-
-        ' Attach dashboard snapshot as regular attachment
-        If imgOK And Dir(imgPath) <> "" Then
-            .Attachments.Add imgPath
-        End If
-
+        ' Sent file NOT attached — update commentary in working file first,
+        ' then attach the sent file manually before sending
         .HTMLBody = html
         .Display
     End With
     Exit Sub
 ErrH:
-    MsgBox "Email could not be opened automatically." & vbNewLine & _
-           "Sent file: " & sentPath, vbExclamation, "Email Warning"
+    MsgBox "Email draft could not be opened." & vbNewLine & _
+           "Sent file saved at: " & sentPath, vbExclamation, "Email Warning"
 End Sub
+
 
 '─── FEE CONTRIBUTORS FROM PF FEES TAB ────────────────────────────────────────
 
@@ -1113,17 +1096,28 @@ Private Function P2_GetFeeContributors(feeWs As Worksheet, yyyymm As Long) As St
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
 
-    For r = 1 To 10
+    For r = 1 To 15
         For c = 1 To lastCol
             Dim cv As Variant: cv = feeWs.Cells(r, c).Value
-            If IsNumeric(cv) Then
-                If CLng(cv) = yyyymm Then currCol = c: hdRow = r
-                If CLng(cv) = prevMM  Then prevCol = c: hdRow = r
-            ElseIf CStr(cv) = CStr(yyyymm) Then
-                currCol = c: hdRow = r
-            ElseIf CStr(cv) = CStr(prevMM) Then
-                prevCol = c: hdRow = r
+            Dim cvLong As Long: cvLong = 0
+            ' Handle number, text, or date serial
+            If IsNumeric(cv) And Not IsEmpty(cv) Then
+                Dim cvD As Double: cvD = CDbl(cv)
+                ' Date serial range for 2020-2030 (approx 43831 to 47481)
+                If cvD > 43000 And cvD < 50000 Then
+                    Dim dt As Date: dt = CDate(cv)
+                    cvLong = Year(dt) * 100 + Month(dt)
+                ElseIf cvD >= 200001 And cvD <= 209912 Then
+                    cvLong = CLng(cv)
+                End If
+            ElseIf Not IsEmpty(cv) Then
+                Dim cvStr As String: cvStr = Trim(CStr(cv))
+                If Len(cvStr) = 6 And IsNumeric(cvStr) Then
+                    cvLong = CLng(cvStr)
+                End If
             End If
+            If cvLong = yyyymm Then currCol = c: hdRow = r
+            If cvLong = prevMM  Then prevCol = c: hdRow = r
         Next c
     Next r
 
@@ -1326,14 +1320,18 @@ Private Function P2V(ws As Worksheet, r As Long, c As Long) As Double
 End Function
 
 ' Dashboard cells store actual SGD values — divide for display
+' Note: $ sign NOT included here — added explicitly in commentary text
+' Dashboard P&L values are already in $m (e.g. 58.8 = $58.8m)
+' FM formats as "$X.Xm", FB formats as "$X.Xb" (divides by 1000 since already in $m)
 Private Function FM(v As Double) As String
-    FM = "$" & Format(v / 1000000, "0.0") & "m"
+    FM = "$" & Format(Abs(v), "0.0") & "m"
 End Function
 Private Function FMS(v As Double) As String
-    If v >= 0 Then FMS = "+" & FM(v) Else FMS = "-" & FM(Abs(v))
+    If v >= 0 Then FMS = "+$" & Format(v, "0.0") & "m" Else FMS = "-$" & Format(Abs(v), "0.0") & "m"
 End Function
 Private Function FB(v As Double) As String
-    FB = "$" & Format(v / 1000000000, "0.0") & "b"
+    ' EOP assets in $bn — divide by 1000 since dashboard stores in $m
+    FB = "$" & Format(Abs(v) / 1000, "0.0") & "b"
 End Function
 Private Function AB(v As Double) As String:  AB  = IIf(v >= 0, "above", "below"):            End Function
 Private Function SW(v As Double) As String:  SW  = IIf(v >= 0, "stronger", "weaker"):        End Function
