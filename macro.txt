@@ -33,7 +33,7 @@ Const P2_EMAIL_CC_CELL  As String = "B39"
 Const P2_GREETING_CELL  As String = "B40"
 Const P2_YOUR_NAME_CELL As String = "B41"
 Const P2_NIM_RANGE_CELL As String = "B42"  ' e.g. "330:348" — LCIN adjustment rows
-Const P2_NIM_DATA_CELL  As String = "B43"  ' e.g. "35:291" SUMIF lookup range
+Const P2_NIM_DATA_CELL  As String = "B43"  ' e.g. "10:291" SUMIF lookup range
 
 '─── TAB NAME CONSTANTS ────────────────────────────────────────────────────────
 Const T_WORK_PIVOTS  As String = "Working + Working PF pivots"
@@ -82,7 +82,7 @@ End Function
 Private Function P2_DataStart() As Long
     Dim s As String: s = P2S(P2_NIM_DATA_CELL)
     Dim p() As String: p = Split(s, ":")
-    If UBound(p) >= 0 And IsNumeric(p(0)) Then P2_DataStart = CLng(p(0)) Else P2_DataStart = 35
+    If UBound(p) >= 0 And IsNumeric(p(0)) Then P2_DataStart = CLng(p(0)) Else P2_DataStart = 10
 End Function
 
 Private Function P2_DataEnd() As Long
@@ -131,8 +131,8 @@ Public Sub AddPart2ToControlPanel()
     defaults(6) = "Louisa"
     labels(7) = "Normalised NIM LCIN rows  (e.g. 298:320)"
     defaults(7) = "298:320"
-    labels(8) = "Normalised NIM SUMIF data rows  (e.g. 35:291)"
-    defaults(8) = "35:291"
+    labels(8) = "Normalised NIM SUMIF data rows  (e.g. 10:291)"
+    defaults(8) = "10:291"
 
     Dim r As Long
     For r = 1 To 8
@@ -333,7 +333,6 @@ Private Sub RunPFFinancials(workingPath As String, yyyymm As Long)
     P2Log "Step 7/9 - Save Working", "RUNNING", "Saving " & newFileName & "..."
     Application.ScreenUpdating = False
     pfWb.Save
-    Set pfWb = Nothing
     P2Log "Step 7/9 - Save Working", "OK", "Saved."
 
     '── Step 8: Create sent file ───────────────────────────────────────────────
@@ -512,16 +511,15 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
     Dim daysInMo As Long: daysInMo = P2_DaysInMonth(yyyymm)
 
     ' Find NIM % cell — search for yellow highlighted cell in NII column
-    ' Pivot currently ends ~291, NIM % cell shifted to row 350
-    ' Search 340-380 to give room for pivot growth
+    ' NIM % cell confirmed at row 350 col I for current period
+    ' Search 345-360 to allow small drift if pivot grows
     Dim nimPctRow As Long: nimPctRow = 0
     Dim nimPctCol As Long: nimPctCol = colNII
     Dim r As Long
 
     ' Method 1: find by yellow fill colour
-    For r = 340 To 380
+    For r = 345 To 360
         If ws.Cells(r, nimPctCol).Interior.Color = RGB(255, 255, 0) Or _
-           ws.Cells(r, nimPctCol).Interior.Color = RGB(255, 255, 180) Or _
            ws.Cells(r, nimPctCol).Interior.ColorIndex = 6 Or _
            ws.Cells(r, nimPctCol).Interior.ColorIndex = 36 Then
             nimPctRow = r: Exit For
@@ -530,7 +528,7 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
 
     ' Method 2: find existing formula in range
     If nimPctRow = 0 Then
-        For r = 340 To 380
+        For r = 345 To 360
             If ws.Cells(r, nimPctCol).HasFormula Then
                 nimPctRow = r: Exit For
             End If
@@ -540,7 +538,7 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
     ' Method 3: find NIM-range value (0.3% to 3%)
     If nimPctRow = 0 Then
         Dim v As Variant
-        For r = 340 To 380
+        For r = 345 To 360
             v = ws.Cells(r, nimPctCol).Value
             If IsNumeric(v) Then
                 If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
@@ -550,10 +548,10 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
         Next r
     End If
 
-    ' Fallback: use row 350
+    ' Fallback: row 350 confirmed by user
     If nimPctRow = 0 Then
         nimPctRow = 350
-        P2Log "Normalised NIM %", "INFO", "NIM % cell not found in rows 340-380 — using row 350."
+        P2Log "Normalised NIM %", "INFO", "NIM % cell not found by colour/formula — using confirmed row 350."
     End If
 
     ' Build formula:
