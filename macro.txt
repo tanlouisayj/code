@@ -538,11 +538,21 @@ Private Sub P2_WriteNIMPercentFormula(ws As Worksheet, yyyymm As Long)
                  "/" & daysInMo & "*365)" & _
                  "/" & lAss & grandTotalRow
 
+    On Error Resume Next
     ws.Cells(nimPctRow, nimPctCol).Formula = nimFormula
-    ws.Cells(nimPctRow, nimPctCol).NumberFormat = "0.00%"
+    Dim writeErr As Long: writeErr = Err.Number
+    On Error GoTo 0
 
-    P2Log "Normalised NIM %", "OK", "NIM % formula at row " & nimPctRow & " col " & lNII & _
-          ". Grand Total row " & grandTotalRow & ". Days = " & daysInMo & "."
+    If writeErr <> 0 Then
+        P2Log "Normalised NIM %", "INFO", "Could not write NIM % formula at row " & nimPctRow & _
+              " col " & lNII & " (cell may be protected or merged). Formula was: " & nimFormula
+    Else
+        On Error Resume Next
+        ws.Cells(nimPctRow, nimPctCol).NumberFormat = "0.00%"
+        On Error GoTo 0
+        P2Log "Normalised NIM %", "OK", "NIM % formula written at row " & nimPctRow & _
+              " col " & lNII & ". Grand Total row " & grandTotalRow & ". Days = " & daysInMo & "."
+    End If
 End Sub
 
 Private Function P2_DaysInMonth(yyyymm As Long) As Long
