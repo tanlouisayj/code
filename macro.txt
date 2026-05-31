@@ -633,148 +633,153 @@ ErrH: P2_GetNormNIM = 0
 End Function
 
 '─── UPDATE DIRECT COST LINKS ──────────────────────────────────────────────────
-' v7 LOGIC:
-'   1. Scan row 8 on P&L_PF for the current reporting month (e.g. "Apr") → currCol
-'   2. prevCol = currCol - 1  (the column immediately to the left)
-'   3. Copy prevCol formula to currCol, advancing every column-letter reference
-'      inside the formula by +1  (Z→AA, AA→AB, etc.) using P2_IncrementColInFormula.
-'   4. Also replace the prev month label text (e.g. "Mar 26") with curr month
-'      label (e.g. "Apr 26") so any text references in the formula are updated.
-'   This mirrors what Ctrl+R does — Excel shifts relative column references
-'   right by one column when filling right.
+' Rows 29-30 on P&L_PF contain external-link formulas pointing to a file that
+' does not exist yet, e.g.:
+'   ='\\server\path\[Direct Cost - Mar 26 - PF.xls]PF'!$Z$31
+' We need to write the new month's equivalent:
+'   ='\\server\path\[Direct Cost - Apr 26 - PF.xls]PF'!$AA$31
+'
+' Key challenges:
+'   - The target file doesn't exist → must suppress Excel's link-update dialogs.
+'   - .Formula on a cell with a broken external link may return an error string
+'     rather than the formula text → we read it defensively.
+'   - The only things that change are: (a) month label in filename, (b) the
+'     $COL$ reference after "!" advances by one column (Z→AA etc.).
+'
+' Strategy:
+'   1. Scan row 8 for current month header → currCol; prevCol = currCol - 1.
+'   2. Read prevCol formula string.
+'   3. Replace month label in filename portion (Mar 26 → Apr 26).
+'   4. Advance $COL after "!" by +1 via P2_AdvanceExternalLinkCol.
+'   5. Write with DisplayAlerts=False + AskToUpdateLinks=False.
 
 Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
-    Dim mo As Long: mo = yyyymm Mod 100
-    Dim currLbl  As String: currLbl  = P2_MonthLabel(yyyymm)
-    Dim prevMM   As Long:   prevMM   = P2_PrevYYYYMM(yyyymm)
-    Dim prevLbl  As String: prevLbl  = P2_MonthLabel(prevMM)
-    Dim shortMo  As String: shortMo  = Left(currLbl, 3)   ' e.g. "Apr"
-    Dim shortPrev As String: shortPrev = Left(prevLbl, 3) ' e.g. "Mar"
+    Dim mo      As Long:   mo      = yyyymm Mod 100
+    Dim yr2     As String: yr2     = Right(CStr(yyyymm \ 100), 2)   ' e.g. "26"
+    Dim currLbl As String: currLbl = P2_MonthLabel(yyyymm)
+    Dim prevMM  As Long:   prevMM  = P2_PrevYYYYMM(yyyymm)
+    Dim prevLbl As String: prevLbl = P2_MonthLabel(prevMM)
+    Dim shortMo   As String: shortMo   = Left(currLbl, 3)    ' e.g. "Apr"
+    Dim shortPrev As String: shortPrev = Left(prevLbl, 3)    ' e.g. "Mar"
 
-    ' ── Step 1: Find currCol by scanning row 8 for current month header ───────
+    ' ── Find currCol: scan row 8 for current month header ─────────────────────
     Dim currCol As Long: currCol = 0
-    Dim prevCol As Long: prevCol = 0
     Dim c As Long
     For c = 1 To 50
         Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
         If InStr(1, hdr, shortMo, vbTextCompare) > 0 Then currCol = c
     Next c
-
-    ' Fallback if header scan fails
-    If currCol = 0 Then currCol = 5 + mo
-    prevCol = currCol - 1   ' always one column to the left — mirrors Ctrl+R source
+    If currCol = 0 Then currCol = 5 + mo   ' fallback
+    Dim prevCol As Long: prevCol = currCol - 1
 
     P2Log "Direct Cost Links", "INFO", _
-          "Row 8 scan: currCol=" & currCol & " (" & shortMo & "), prevCol=" & prevCol & " (" & shortPrev & ")."
+          "prevCol=" & prevCol & " (" & shortPrev & ") → currCol=" & currCol & " (" & shortMo & ")"
 
-    ' ── Step 2: For rows 29 and 30, copy prevCol formula → currCol with col+1 ─
+    ' ── Suppress link dialogs for the duration of the write ───────────────────
+    Dim savedAlerts As Boolean: savedAlerts = Application.DisplayAlerts
+    Dim savedAsk    As Boolean: savedAsk    = Application.AskToUpdateLinks
+    Application.DisplayAlerts   = False
+    Application.AskToUpdateLinks = False
+
     Dim r As Long
     For r = 29 To 30
-        Dim prevF As String: prevF = plWs.Cells(r, prevCol).Formula
-        If prevF = "" Or prevF = "0" Then
+
+        ' Read source formula — broken external links may return error strings,
+        ' so read defensively and log what we got
+        Dim prevF As String: prevF = ""
+        On Error Resume Next
+        prevF = plWs.Cells(r, prevCol).Formula
+        On Error GoTo 0
+
+        If Left(prevF, 1) <> "=" Then
             P2Log "Direct Cost Links", "INFO", _
-                  "Row " & r & " col " & prevCol & " is empty/zero — nothing to copy."
-            GoTo NextRow
+                  "Row " & r & " col " & prevCol & " — no formula found (got: [" & _
+                  Left(prevF, 80) & "]). Skipping."
+            GoTo NextDCRow
         End If
 
-        ' Advance every column-letter reference in the formula by +1 (Z→AA etc.)
-        Dim newF As String
-        newF = P2_IncrementColInFormula(prevF)
+        ' Build new formula: swap month label then advance column ref after "!"
+        Dim newF As String: newF = prevF
+        newF = Replace(newF, shortPrev & " " & yr2, shortMo & " " & yr2)
+        newF = P2_AdvanceExternalLinkCol(newF)
 
-        ' Also update month-label text in the formula (e.g. "Mar 26" → "Apr 26")
-        newF = Replace(newF, shortPrev & " 26", shortMo & " 26")
-        newF = Replace(newF, " " & shortPrev & " ", " " & shortMo & " ")
-
-        ' Always overwrite — copy prevCol formula to currCol unconditionally
+        ' Write — errors here mean a protected cell or sheet; log and continue
+        On Error Resume Next
         plWs.Cells(r, currCol).Formula = newF
-        P2Log "Direct Cost Links", "INFO", _
-              "Row " & r & " col " & currCol & " written. Formula: " & Left(newF, 80)
+        Dim wErr As Long: wErr = Err.Number
+        On Error GoTo 0
 
-NextRow:
+        If wErr <> 0 Then
+            P2Log "Direct Cost Links", "INFO", _
+                  "Row " & r & " write failed (err " & wErr & "). Formula was: " & Left(newF, 100)
+        Else
+            P2Log "Direct Cost Links", "OK", _
+                  "Row " & r & " col " & currCol & " written: " & Left(newF, 100)
+        End If
+
+NextDCRow:
     Next r
+
+    Application.DisplayAlerts   = savedAlerts
+    Application.AskToUpdateLinks = savedAsk
 End Sub
 
-'─── INCREMENT COLUMN LETTERS IN A FORMULA BY +1 ──────────────────────────────
-' Advances every $COL$ or $COL reference inside a formula string by one column.
-' Handles single-letter (A-Z) and double-letter (AA-XFD) column references.
-' Examples:
-'   $Z$14   → $AA$14
-'   $AA$14  → $AB$14
-'   $AZ$14  → $BA$14
-' Only advances references preceded by $ (absolute column refs in external links
-' and standard Excel formulas). Relative refs without $ are left unchanged
-' since Ctrl+R in Excel only shifts relative refs — but external link formulas
-' always use absolute $COL notation, which is what rows 29-30 contain.
+'─── ADVANCE THE $COL$ REFERENCE AFTER "!" IN AN EXTERNAL LINK FORMULA ────────
+' Targets only the cell reference after the last "!" in the formula, which is
+' always the sheet cell reference in an external link.  Everything before "!"
+' (the file path, sheet name, month label) is left untouched.
+'
+' Input:  ='\\path\[Direct Cost - Apr 26 - PF.xls]PF'!$Z$31
+' Output: ='\\path\[Direct Cost - Apr 26 - PF.xls]PF'!$AA$31
+'
+' Also works for non-external formulas with a single $COL$ reference.
 
-Private Function P2_IncrementColInFormula(formula As String) As String
-    Dim result As String: result = formula
-    Dim i As Long: i = 1
-    Dim out As String: out = ""
+Private Function P2_AdvanceExternalLinkCol(f As String) As String
+    ' Find the "!" separator — cell ref is everything after it
+    Dim bangPos As Long: bangPos = InStrRev(f, "!")
+    If bangPos = 0 Then P2_AdvanceExternalLinkCol = f: Exit Function
 
-    Do While i <= Len(result)
-        Dim ch As String: ch = Mid(result, i, 1)
+    ' Expect: $LETTERS$DIGITS  immediately after "!"
+    Dim pos As Long: pos = bangPos + 1
+    If pos > Len(f) Or Mid(f, pos, 1) <> "$" Then
+        P2_AdvanceExternalLinkCol = f: Exit Function
+    End If
+    pos = pos + 1   ' skip the leading $, now at first letter
 
-        ' Look for $ followed by one or two uppercase letters followed by $ or digit
-        If ch = "$" Then
-            ' Peek ahead to see if this is a column reference: $[A-Z]{1,2}[$0-9]
-            Dim j As Long: j = i + 1
-            Dim colStr As String: colStr = ""
-            Do While j <= Len(result)
-                Dim nc As String: nc = Mid(result, j, 1)
-                If nc >= "A" And nc <= "Z" Then
-                    colStr = colStr & nc
-                    j = j + 1
-                Else
-                    Exit Do
-                End If
-            Loop
-            ' Valid column ref: 1 or 2 letters followed by $ or digit
-            If Len(colStr) >= 1 And Len(colStr) <= 3 Then
-                Dim nextCh As String
-                nextCh = ""
-                If j <= Len(result) Then nextCh = Mid(result, j, 1)
-                If nextCh = "$" Or (nextCh >= "0" And nextCh <= "9") Then
-                    ' Increment the column
-                    Dim newCol As String: newCol = P2_NextColLetter(colStr)
-                    out = out & "$" & newCol
-                    i = j  ' skip past the original col letters
-                    GoTo NextChar
-                End If
-            End If
-            ' Not a column ref — output $ as-is
-            out = out & ch
-            i = i + 1
+    ' Read column letters
+    Dim colStart As Long: colStart = pos
+    Do While pos <= Len(f)
+        If Mid(f, pos, 1) >= "A" And Mid(f, pos, 1) <= "Z" Then
+            pos = pos + 1
         Else
-            out = out & ch
-            i = i + 1
+            Exit Do
         End If
-NextChar:
     Loop
+    Dim colLetters As String: colLetters = Mid(f, colStart, pos - colStart)
+    If Len(colLetters) = 0 Then P2_AdvanceExternalLinkCol = f: Exit Function
 
-    P2_IncrementColInFormula = out
+    ' Rebuild with incremented column; row part (pos onward) is unchanged
+    P2_AdvanceExternalLinkCol = Left(f, colStart - 1) & _
+                                P2_NextColLetter(colLetters) & _
+                                Mid(f, pos)
 End Function
 
 '─── ADVANCE A COLUMN LETTER STRING BY ONE ────────────────────────────────────
-' Converts column letter string to number, adds 1, converts back.
-' e.g. "Z" → "AA", "AA" → "AB", "AZ" → "BA"
+' "Z"→"AA", "AA"→"AB", "AZ"→"BA", etc.
 
 Private Function P2_NextColLetter(colLetters As String) As String
-    ' Convert letters to column number
     Dim n As Long: n = 0
     Dim k As Long
     For k = 1 To Len(colLetters)
         n = n * 26 + (Asc(Mid(colLetters, k, 1)) - Asc("A") + 1)
     Next k
-    ' Increment
     n = n + 1
-    ' Convert back to letters
-    Dim result As String: result = ""
+    Dim res As String: res = ""
     Do While n > 0
-        Dim rem As Long: rem = (n - 1) Mod 26
-        result = Chr(Asc("A") + rem) & result
+        res = Chr(Asc("A") + (n - 1) Mod 26) & res
         n = (n - 1) \ 26
     Loop
-    P2_NextColLetter = result
+    P2_NextColLetter = res
 End Function
 
 '─── BUILD COMMENTARY ──────────────────────────────────────────────────────────
