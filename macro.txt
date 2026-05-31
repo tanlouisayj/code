@@ -1,25 +1,26 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v5)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v6)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
+' CHANGES IN v6 (vs v5):
+'   - P2_CreateSentFile:
+'       * Step 7 (new): ClearComments on ALL sheets before SaveAs — ensures no
+'         cell notes are present in the sent .xlsx file
+'   - P2_BuildCommentary:
+'       * Added bracketNIM = P2V(dashWs, 14, CN)  [col N row 14]
+'         Used ONLY in the NII sentence "compressed NIM (x% vs y% budget)"
+'       * currNIM (col I row 14) is still used for the NIM MoM sentence
+'         "NIM decreased xxbps MoM from x% in Mar to y% in Apr"
 ' CHANGES IN v5 (vs v4):
 '   - P2_BuildCommentary:
-'       * currNIM now reads row 14 col I (9) — was col N (14) in v4
+'       * currNIM reads row 14 col I (9) — was col N (14) in v4
 '       * Extra vbNewLine before X-selling section removed
 '   - P2_GetFeeContributors:
-'       * Customer name now reads col 1 (A) first, falls back to col 2 (B)
-'         — was col 2 (B) first in v4, which returned internal IDs instead of names
+'       * Customer name reads col 1 (A) first, falls back to col 2 (B)
 ' CHANGES IN v4 (vs v3):
-'   - P2_BuildCommentary:
-'       * currEOP reads row 11 col N (14) — was dynamic currCol
-'       * Non-NII MoM = I24 - H24 (cols 9 and 8) — was currCol/prevCol
-'       * currNonNii = col I (9) row 24; prevNonNii = col H (8) row 24
-'       * currNonNii and prevNonNii passed to P2_GetFeeContributors as totals
-'   - P2_GetFeeContributors:
-'       * Signature extended: now accepts currTotal and prevTotal (I24 / H24)
-'       * 80% cumulative coverage replaces fixed top-3 cap
-'   - All other logic unchanged from v3
+'   - P2_BuildCommentary: currEOP col N; Non-NII = I24-H24; totals passed to fees
+'   - P2_GetFeeContributors: 80% cumulative coverage replaces fixed top-3 cap
 '=============================================================================
 
 Option Explicit
@@ -720,8 +721,9 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim nonNiiVsD As Double: nonNiiVsD = P2V(dashWs, 24, CR)
 
     ' ── NIM: current month fixed to col I (9); prev month uses dynamic prevCol
-    Dim currNIM As Double: currNIM = P2V(dashWs, 14, CI)       ' FIX v5: col I row 14
-    Dim prevNIM As Double: prevNIM = P2V(dashWs, 14, prevCol)  ' MoM prev — dynamic
+    Dim currNIM    As Double: currNIM    = P2V(dashWs, 14, CI)       ' FIX v5: col I row 14 — used for MoM sentence
+    Dim bracketNIM As Double: bracketNIM = P2V(dashWs, 14, CN)       ' col N row 14 — used only in NII bracket "compressed NIM x% vs y%"
+    Dim prevNIM    As Double: prevNIM    = P2V(dashWs, 14, prevCol)  ' MoM prev — dynamic
     Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)
     Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 100)
 
@@ -771,7 +773,7 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     t = t & "NII of " & FM(Abs(niiYTD)) & " was " & FM(Abs(niiVsBgtD)) & " " & _
         AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
         "(" & FB(Abs(ytdEOP)) & " vs " & FB(Abs(bgtEOP)) & " budget) and compressed NIM " & _
-        "(" & Format(Abs(currNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
+        "(" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
 
     ' Section 3: NIM MoM — curr = col N row 14; prev = dynamic prevCol row 14
@@ -960,7 +962,15 @@ Private Sub P2_CreateSentFile(pfWb As Workbook, yyyymm As Long, sentPath As Stri
         On Error GoTo 0
     Next h
 
-    ' 7. Save as xlsx (strips macros) and delete temp xlsm
+    ' 7. Delete all cell notes/comments from every sheet before saving
+    Dim wsCN As Worksheet
+    For Each wsCN In sentWb.Sheets
+        On Error Resume Next
+        wsCN.Cells.ClearComments
+        On Error GoTo 0
+    Next wsCN
+
+    ' 8. Save as xlsx (strips macros) and delete temp xlsm
     Application.DisplayAlerts = False
     On Error Resume Next
     sentWb.SaveAs sentPath, xlOpenXMLWorkbook
