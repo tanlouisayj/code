@@ -1,20 +1,24 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v4)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v5)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
+' CHANGES IN v5 (vs v4):
+'   - P2_BuildCommentary:
+'       * currNIM now reads row 14 col I (9) — was col N (14) in v4
+'       * Extra vbNewLine before X-selling section removed
+'   - P2_GetFeeContributors:
+'       * Customer name now reads col 1 (A) first, falls back to col 2 (B)
+'         — was col 2 (B) first in v4, which returned internal IDs instead of names
 ' CHANGES IN v4 (vs v3):
 '   - P2_BuildCommentary:
-'       * currNIM now reads row 14 col N (14) — was dynamic currCol
-'       * currEOP now reads row 11 col N (14) — was dynamic currCol
+'       * currEOP reads row 11 col N (14) — was dynamic currCol
 '       * Non-NII MoM = I24 - H24 (cols 9 and 8) — was currCol/prevCol
 '       * currNonNii = col I (9) row 24; prevNonNii = col H (8) row 24
 '       * currNonNii and prevNonNii passed to P2_GetFeeContributors as totals
 '   - P2_GetFeeContributors:
 '       * Signature extended: now accepts currTotal and prevTotal (I24 / H24)
-'       * 80% cumulative coverage replaces fixed top-3 cap:
-'         contributors are listed (sorted desc by absolute value) until their
-'         running absolute sum >= 80% of Abs(currTotal) / Abs(prevTotal)
+'       * 80% cumulative coverage replaces fixed top-3 cap
 '   - All other logic unchanged from v3
 '=============================================================================
 
@@ -715,8 +719,8 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim nonNiiYTD As Double: nonNiiYTD = P2V(dashWs, 24, CN)
     Dim nonNiiVsD As Double: nonNiiVsD = P2V(dashWs, 24, CR)
 
-    ' ── NIM: current month fixed to col N (14); prev month uses dynamic prevCol
-    Dim currNIM As Double: currNIM = P2V(dashWs, 14, CN)       ' FIX v4: col N row 14
+    ' ── NIM: current month fixed to col I (9); prev month uses dynamic prevCol
+    Dim currNIM As Double: currNIM = P2V(dashWs, 14, CI)       ' FIX v5: col I row 14
     Dim prevNIM As Double: prevNIM = P2V(dashWs, 14, prevCol)  ' MoM prev — dynamic
     Dim bgtNIM  As Double: bgtNIM  = P2V(dashWs, 14, CW)
     Dim nimBps  As Long:   nimBps  = CLng((currNIM - prevNIM) * 100)
@@ -799,10 +803,8 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         vbNewLine & vbNewLine
     t = t & feeText
 
-    ' Section 6: X-selling — blank line before (feeText ends with vbNewLine,
-    '            caller adds one more vbNewLine for the blank separator)
-    t = t & vbNewLine & _
-        "YTD " & mLbl & " X-selling Income of " & FM(Abs(xsellYTD)) & _
+    ' Section 6: X-selling — no extra blank line; feeText already ends with vbNewLine
+    t = t & "YTD " & mLbl & " X-selling Income of " & FM(Abs(xsellYTD)) & _
         " is mainly derived from:" & vbNewLine
     t = t & "- Cash +" & Format(Abs(cashYTD) / 1000000, "0.0") & "m" & vbNewLine
     t = t & "- GFM Sales $" & Format(Abs(gfmYTD) / 1000000, "0.0") & "m; and" & vbNewLine
@@ -1170,14 +1172,14 @@ NextArrCell:
           " (" & yyyymm & ") prevCol=" & prevCol & " (" & prevMM & ")"
 
     ' ── Collect customer names and fee values from array ──────────────────────
-    ' Customer name from column 2; skip blank / total / grand total rows
+    ' Customer name from column 1 (col A); skip blank / total / grand total rows
     Dim cNames() As String, cVals() As Double, cCnt As Long: cCnt = 0
     Dim pNames() As String, pVals() As Double, pCnt As Long: pCnt = 0
 
     For r = hdRow + 1 To nRows
         Dim custN As String
-        custN = Trim(CStr(pvData(r, 2)))
-        If custN = "" And nCols >= 1 Then custN = Trim(CStr(pvData(r, 1)))
+        custN = Trim(CStr(pvData(r, 1)))
+        If custN = "" And nCols >= 2 Then custN = Trim(CStr(pvData(r, 2)))
         If custN = "" Then GoTo NextFeeRow
         If InStr(1, LCase(custN), "total") > 0 Then GoTo NextFeeRow
         If InStr(1, LCase(custN), "grand") > 0 Then GoTo NextFeeRow
