@@ -1,0 +1,241 @@
+# PF Process Automation — AI-Assisted Initiative
+**Prepared by: Louisa | June 2026**
+
+---
+
+## Overview
+
+Since joining the PF team, I have designed and built two end-to-end automation pipelines for the monthly PF reporting cycle using Claude (AI) to assist with VBA coding. Both tools run entirely within DBS infrastructure — no data leaves the bank's systems at any point.
+
+The initiative directly addresses the team's stated priorities: revamping legacy manual processes, adopting AI tools, and ensuring this year's ways of working are materially better than last year's.
+
+---
+
+## What Has Been Automated
+
+### Tool 1 — PF Caselist Pipeline
+
+**What it does:** Fully automates the monthly PF Caselist report and email to Steve.
+
+Previously, this process required manually downloading the QS SQL data, cleaning and appending it to the master file, refreshing pivot tables, manually formatting the output file, writing Month-on-Month commentary, and drafting the Outlook email by hand.
+
+The automation now handles all of this in a single click:
+
+- **Data ingestion:** Detects the dropped `YYYYMM.xlsx` file automatically from the shared drive watch folder — no manual file selection needed
+- **Data validation:** Runs pre-checks on the source file before processing to catch errors early
+- **Data cleaning & append:** Deletes any existing rows for that period in the QS master file, then bulk-copies the new data, preserving column AA as text (fixing a known pivot grouping issue)
+- **Trafigura edge case:** Handles this deal's non-standard data flow via a dedicated control panel input section — values are patched in automatically and cells self-clear after each run so they don't carry over to the next month
+- **Two-pass pivot refresh:** Refreshes pivots in a deliberate two-step sequence to ensure the AF column VLOOKUP reads correctly refreshed data before the Caselist Pivots are built
+- **Automated output formatting:** Extracts five pivot views (EOP Asset Balance, Total Income, NII, Fee, Other Income) into a clean, consistently formatted output file — Row 1 bold with light blue header, Row 2 bold red, columns A and B bold throughout, all "total" rows bolded — eliminating the need to manually reformat the caselist each month
+- **MoM NII commentary — how it works:** After the output file is saved, the macro captures the NII pivot data in memory (before closing the workbook) and runs the following logic:
+
+  *Example output in email body:*
+  > *NII MoM (Mar 26 to Apr 26): +$1,234,000*
+  > *Key contributors to increase:*
+  > *  - Customer A: +$850,000 (52.3%)*
+  > *  - Customer B: +$430,000 (26.5%)*
+  > *  - Customer C: +$210,000 (12.9%)*
+
+  | Step | What the code does |
+  |---|---|
+  | Find header row | Scans all rows of the NII pivot for any cell containing a valid YYYYMM value (200001–209912) — handles pivot structures where the month header isn't always in row 1 |
+  | Find month columns | Locates the column where the header = current YYYYMM and the column where header = prior YYYYMM |
+  | Calculate movement | For each customer row (skipping blanks and "total" rows), computes current month minus prior month |
+  | Determine net direction | Sums all movements — if net total is positive, the overall movement is an increase; if negative, a decline |
+  | Filter same-direction only | Keeps only customers whose individual movement matches the net direction — so if NII overall increased, only customers who contributed to the increase are listed (not those who partially offset it) |
+  | Sort by size | Sorts same-direction contributors by absolute value, largest first |
+  | Apply 80% / 10-name cap | Lists contributors one by one, accumulating a running total — stops as soon as the running total reaches 80% of all same-direction movement, or after 10 names, whichever comes first |
+  | Format | Each line: `- Customer Name: +/-$X,XXX,XXX (XX.X%)` |
+
+- **MoM Fee balance commentary — how it works:** Separately reads the Fee pivot (which shows fee income balances, not NII movements) and applies a different logic — it ranks customers by their absolute fee **balance** in the current month rather than by MoM change, because Steve's question on fees is typically "who are the biggest fee earners this month" rather than "what changed":
+
+  *Example output in email body:*
+  > *Fee MoM (Mar 26 to Apr 26): +$320,000*
+  > *Top contributors to Apr 26 Fee balance:*
+  > *  - Customer X: $1,200,000 (45.2%)*
+  > *  - Customer Y: $890,000 (33.6%)*
+
+  | Step | What the code does |
+  |---|---|
+  | Find header row | Same YYYYMM scan as NII — finds the row containing month headers |
+  | Find month columns | Locates current and prior YYYYMM columns |
+  | Calculate MoM total | Sums all customer balances for current month and prior month to show total fee MoM in the header line |
+  | Rank by current balance | Collects each customer's current month balance, sorts descending by absolute value |
+  | Apply 80% coverage | Lists top customers by balance until their running total covers 80% of the total fee pool |
+  | Format | Header: `Fee MoM (Mar 26 to Apr 26): +$320,000` then each line: `- Customer Name: $X,XXX,XXX (XX.X%)` |
+
+- **How both commentaries get into the email:** Once both text blocks are generated, they are passed directly into the `SendEmail` function as variables (`niiText` and `feeText`). The email body is assembled as plain text in this order: greeting → standard intro sentence → `niiText` block → `niiText` blank line → `feeText` block → sign-off. The Outlook draft opens with everything already populated — subject line formatted as `"PF Apr 26 Caselist - EOP Asset Balance and Total Income by Country"`, caselist `.xlsx` attached, and both commentary blocks in the body. No copy-pasting required.
+
+**Estimated time saved:** ~3 hours per month (data processing ~1 hr, formatting ~1 hr, commentary writing + email drafting ~1 hr)
+
+---
+
+### Tool 2 — PF Financials Pipeline
+
+**What it does:** Automates the monthly PF Financials report production and email, which is a significantly more complex process.
+
+Previously this involved manually renaming the working file, opening and refreshing multiple workbooks, updating formula links, manually formatting the sent copy, writing the full P&L commentary from scratch, and drafting the email.
+
+The automation now runs a 9-step pipeline in one click:
+
+- **Step 1 — File rename:** Auto-detects the `Project_Finance * (working).xlsm` file in the folder and renames it to the new reporting period
+- **Step 2 — QS pivot refresh + Normalised NIM:** Opens the QS SQL download, refreshes the Working Pivots and Normalised NIM tab, and dynamically calculates the quarter-to-date SUMIF formulas for NIM across the correct 3-month window (handling both mid-quarter and quarter-end months correctly). Also writes the annualised NIM % formula adjusted for days in the month
+- **Step 3 — Direct Cost links:** Updates the P&L_PF external link formulas for rows 29–30 (Direct Costs) to point to the new reporting month column, advancing the external file column reference automatically
+- **Step 4 — Workbook link refresh:** Refreshes all external links in the PF working file
+- **Step 5 — Reporting pivot refresh:** Refreshes pivots on PF Fees, Income by Country, Cross-sell, and Customer List tabs
+- **Step 6 — Auto-commentary writing:** This is the most significant step — and the direct response to KY's call in the process improvement meeting to showcase AI for commentaries. The macro reads live values from specific cells in the P&L dashboard tab and builds the full structured commentary automatically, then writes it directly into the dashboard text box in Calibri 9pt with section headers auto-bolded. What previously required manually reading across multiple files, calculating variances, and writing each paragraph from scratch is now generated in seconds.
+
+  The directional language is driven by four helper functions that turn positive/negative numbers into the correct English word automatically — `AB()` returns "above"/"below" for vs-budget comparisons; `SW()` returns "stronger"/"weaker" for NII/Non-NII drivers; `GD()` returns "grew"/"declined" for EOP asset movement; `ID()` returns "increased"/"decreased" for NIM bps movement. The commentary never has to be manually corrected for direction — it is always right because it reads directly from the data.
+
+  **Section 1 — YTD Total Income vs Budget**
+
+  *Example: "YTD Apr 26 Total Income of S$58.8m was $2.7m (4%) below budget, driven primarily by weaker NII (-$6.9m) offset by stronger non-interest income of +$4.3m."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | Total Income S$58.8m | Dashboard row 25, col N | YTD actual |
+  | $2.7m variance | Row 25, col R | vs Budget $ |
+  | 4% | Row 25, col S | vs Budget % |
+  | above / below | Col R sign | `AB()` — positive = above, negative = below |
+  | stronger / weaker NII | Row 23, col R | `SW()` — positive = stronger, negative = weaker |
+  | NII $ variance | Row 23, col R | `FMS()` — shows signed +/- amount |
+  | stronger / weaker Non-NII | Row 24, col R | `SW()` |
+  | Non-NII $ variance | Row 24, col R | `FMS()` |
+
+  **Section 2 — NII vs Budget (with auto-diagnosed reason)**
+
+  *Example: "NII of $42.1m was $6.9m below budget due to lower avg asset volume ($11.2b vs $11.8b budget) and compressed NIM (1.10% vs 1.25% budget)."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | NII actual | Row 23, col N | YTD actual |
+  | NII vs budget $ | Row 23, col R | Direct read |
+  | higher / lower avg asset volume | Row 11 col N vs col W | Compares actual EOP to budget EOP — auto-selects word |
+  | Asset actual $b | Row 11, col N | Displayed in billions |
+  | Asset budget $b | Row 11, col W | Budget FY |
+  | expanded / compressed NIM | Row 14 col N vs col W | Compares actual YTD NIM to budget NIM — auto-selects word |
+  | NIM actual % | Row 14, col N | YTD NIM |
+  | NIM budget % | Row 14, col W | Budget NIM |
+
+  **Section 3 — NIM MoM**
+
+  *Example: "NIM decreased 32bps MoM (from 1.45% in Mar 26 to 1.13% in Apr 26), compressed NIM vs budget (1.13% vs 1.25% budget) due to [UPDATE]. Normalised NIM is 1.24%."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | increased / decreased | nimBps sign | `ID()` function |
+  | bps movement | Row 14 col I minus prevCol | Current month NIM − prior month NIM × 100 |
+  | Prior month % | Row 14, dynamic prevCol | Scans row 8 headers to find prior month column |
+  | Current month % | Row 14, col I | Current month actual |
+  | due to [UPDATE] | — | Only manual input — rate movement reason requires analyst judgement |
+  | Normalised NIM % | QS SQL download, Normalised NIM tab row 350 | Scans row 9 for YYYYMM, reads row 350 of that column |
+
+  **Section 4 — EOP Asset Balance MoM**
+
+  *Example: "EOP Asset Balance grew $0.5b MoM to S$11.2b, but remained $0.5b below budget (budget: $11.8b), resulting in a drag on average asset volume."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | grew / declined | eopMoM sign | `GD()` function |
+  | MoM $ movement | Row 11 col N minus prevCol | Current minus prior month |
+  | Current EOP $b | Row 11, col N | Current month actual |
+  | and / but connector | eopMoM vs eopVsD direction | If MoM and vs-budget move in opposite directions → "but" (contradiction); same direction → "and" |
+  | vs budget $ | Row 11, col R | Direct read |
+  | drag on / support for | eopVsD sign | Negative = "drag on", positive = "support for" |
+
+  **Section 5 — Non-NII MoM and Fee Contributors**
+
+  *Example: "Apr 26 Non-NII grew $1.2m MoM to $4.3m. Key fee contributors: [Major Apr 26 Fees: 1) Customer A $2.1m, 2) Customer B $1.5m ... Major Mar 26 Fees: 1) Customer C $2.3m ...]"*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | grew / declined | nonNiiMoM sign | `GD()` function |
+  | MoM $ movement | Row 24 col I minus col H | Col I = current month, col H = prior month |
+  | Current Non-NII | Row 24, col I | Direct read |
+  | Fee contributors | PF Fees tab, full pivot | Reads all customer rows, sorts by balance descending, lists until 80% of total fee pool covered (max 10 names), shows both current and prior month blocks |
+
+  **Section 6 — Cross-selling YTD**
+
+  *Example: "YTD Apr 26 X-selling Income of $8.5m is mainly derived from: Cash +$4.2m; GFM Sales $2.1m; and Trade +$2.2m."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | X-sell total | Row 72, col N | YTD actual |
+  | Cash | Row 76, col N | YTD actual |
+  | GFM Sales | Row 74, col N | YTD actual |
+  | Trade | Row 75, col N | YTD actual |
+
+  **Section 7 — Direct Expense**
+
+  *Example: "YTD Apr 26 Direct Expense of $12.3m was $0.8m below budget."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | Direct Expense | Row 31, col N | YTD actual |
+  | vs budget | Row 31, col R | `AB()` for above/below |
+
+  **Section 8 — Headcount**
+
+  *Example: "Apr 26 Regional Headcount increased by 2 MoM to 45; +3 vs Bgt."*
+
+  | Element | Source | Logic |
+  |---|---|---|
+  | increased by X / decreased by X / remained at | hcMoM value | Three-way: >0 = "increased by X MoM to", <0 = "decreased by X MoM to", =0 = "remained at" |
+  | Current headcount | Row 68, col I | Current month actual |
+  | vs Budget | Row 68, col O minus col I | Shown as signed number (+3 or -3) |
+- **Step 7 — Save working file**
+- **Step 8 — Create sent file:** Produces a clean, externally shareable `.xlsx` copy automatically — eliminating what was previously a fiddly and error-prone manual cleanup. Specifically it: converts all formulas to values (no broken links when opened by recipient); breaks all external workbook links; hides all internal working tabs (P&L_PF, Working Pivots, Normalised NIM, etc.) so only presentation-ready tabs are visible; collapses all row and column groupings; **deletes all cell notes and comments from every sheet** — ensuring no internal working notes, draft remarks, or analyst annotations are accidentally sent to Steve (a data hygiene step that previously relied on manual checking and was easy to miss); and saves as `.xlsx` stripping all macros
+- **Step 9 — Email draft:** Screenshots the dashboard (range B6:X25), opens a pre-filled Outlook draft with the sent file attached and the dashboard image embedded in the email body
+
+**Estimated time saved:** ~4.5 hours per month (file management ~30 min, pivot refreshes ~1 hr, commentary writing ~1.5 hrs, formatting & sent file creation ~1 hr, email drafting ~30 min)
+
+---
+
+## Total Time Saved
+
+| Process | Estimated Monthly Time (Before) | After Automation | Saved |
+|---|---|---|---|
+| PF Caselist | ~3 hours | ~10 minutes | ~2.5+ hours |
+| PF Financials | ~4.5 hours | ~15 minutes | ~4+ hours |
+| **Total** | **~7.5 hours/month** | **~25 minutes** | **~6.5+ hours/month** |
+
+---
+
+## How Claude Was Used
+
+Claude (AI) was used to write the VBA code. The approach was:
+
+1. **I described each step of the process in plain English** — the logic, the edge cases, the expected outputs. I provided the process knowledge; Claude provided the syntax.
+2. **Iterative debugging** — errors were pasted back to Claude for diagnosis and fixes. The Caselist tool went through 7 versions, each addressing a specific bug (e.g. pivot grouping, MoM column detection).
+3. **No bank data was shared with Claude at any point.** Only process logic and structure were described — the actual data, client names, deal numbers, and financials always remained on DBS shared drives.
+
+This approach mirrors the use case cited in the team meeting: using AI for public-information analysis on a personal device, keeping proprietary data ring-fenced within bank systems.
+
+---
+
+## KPIs Met
+
+| KPI (from team discussion) | How It's Been Addressed |
+|---|---|
+| Pick up PF processes as fast as possible | Both tools built within first months on the job, demonstrating process understanding deep enough to automate |
+| Revamp and clean up PF legacy processes | Monthly Caselist and Financials — both previously fully manual — are now automated end-to-end |
+| Reduce manual Excel dependency | Both pipelines eliminate manual data appending, pivot refreshing, formula updating, output formatting, and commentary writing |
+| Make self-service reporting easier for Steve | Auto-generated NII MoM variance commentary and named fee contributor breakdowns mean Steve's recurring questions are answered in the email itself, before he needs to ask |
+| Explore and adopt AI tools | Claude used to code both pipelines; approach is compliant with data privacy requirements |
+| Showcase AI usage to the team | Concrete, working deliverables ready to demonstrate — not exploratory, already in production use |
+| Whatever you do this year should not be the same as last year | Monthly PF reporting process fundamentally changed from manual to automated |
+
+---
+
+## What Still Requires Human Review
+
+The automation is designed to handle the mechanical work, not replace judgment. The analyst still reviews:
+
+- `[UPDATE]` placeholders in the commentary where qualitative reasoning is needed (e.g. drivers of NIM movement)
+- The Outlook draft before sending
+- Trafigura values (input manually into the control panel before each run)
+- Any data quality issues flagged in the run log
+
+---
+
+*Both tools run on DBS shared drives via Excel VBA. No external systems, no cloud data transfer, no IT dependencies beyond existing Office infrastructure.*
