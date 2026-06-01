@@ -1179,9 +1179,17 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     t = t & vbNewLine & vbNewLine
 
     ' Section 4: EOP Assets MoM — curr = col N row 11; prev = dynamic prevCol row 11
+    ' Connector: "but" when MoM direction contradicts vs-budget (e.g. grew MoM but still below budget)
+    '            "and" when MoM direction matches vs-budget (e.g. declined MoM and below budget)
+    Dim eopConnector As String
+    If (eopMoM >= 0 And eopVsD >= 0) Or (eopMoM < 0 And eopVsD < 0) Then
+        eopConnector = "and"   ' same direction — no contradiction
+    Else
+        eopConnector = "but"   ' opposite direction — contradiction worth flagging
+    End If
     t = t & "EOP Asset Balance " & GD(eopMoM) & " " & FM(Abs(eopMoM)) & " MoM to S" & _
-        FB(Abs(currEOP)) & ", but remained " & FM(Abs(eopVsD)) & " " & AB(eopVsD) & _
-        " budget (budget: " & FB(Abs(bgtEOP)) & ") resulting in a " & _
+        FB(Abs(currEOP)) & ", " & eopConnector & " remained " & FM(Abs(eopVsD)) & " " & AB(eopVsD) & _
+        " budget (budget: " & FB(Abs(bgtEOP)) & "), resulting in a " & _
         IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
     ' Section 5: Non-NII MoM — I24 minus H24; display total = I24
