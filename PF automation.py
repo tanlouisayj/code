@@ -637,18 +637,27 @@ Private Function P2_GetNormNIM(qsWb As Workbook, yyyymm As Long) As Double
     On Error Resume Next: Set ws = qsWb.Sheets(T_NORM_NIM): On Error GoTo ErrH
     If ws Is Nothing Then P2_GetNormNIM = 0: Exit Function
 
+    ' Find the column matching yyyymm by scanning row 9 for the YYYYMM value
+    ' (same lookup used by P2_FindNIMCol but we look in row 9 directly)
     Dim nimCol As Long: nimCol = P2_FindNIMCol(ws, yyyymm, "NII")
     If nimCol = 0 Then P2_GetNormNIM = 0: Exit Function
 
-    Dim r As Long
-    For r = 228 To 245
-        Dim v As Variant: v = ws.Cells(r, nimCol).Value
-        If IsNumeric(v) Then
-            If CDbl(v) > 0.003 And CDbl(v) < 0.03 Then
-                P2_GetNormNIM = CDbl(v): Exit Function
-            End If
+    ' Row 350 = Normalised NIM % for the reporting month
+    Dim v As Variant: v = ws.Cells(350, nimCol).Value
+    If IsNumeric(v) And CDbl(v) <> 0 Then
+        ' Value may be stored as a decimal (e.g. 0.0122 = 1.22%) or already as percent (1.22)
+        Dim d As Double: d = CDbl(v)
+        If d > 0 And d < 0.15 Then
+            ' Stored as decimal — convert to percentage for display
+            P2_GetNormNIM = d * 100
+        ElseIf d >= 0.15 And d < 15 Then
+            ' Already in percentage form (e.g. 1.22)
+            P2_GetNormNIM = d
+        Else
+            P2_GetNormNIM = 0
         End If
-    Next r
+        Exit Function
+    End If
 
     P2_GetNormNIM = 0: Exit Function
 ErrH: P2_GetNormNIM = 0
@@ -1158,14 +1167,14 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         "(" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
         vbNewLine & vbNewLine
 
-    ' Section 3: NIM MoM — curr = col N row 14; prev = dynamic prevCol row 14
+    ' Section 3: NIM MoM — curr = col I row 14; prev = dynamic prevCol row 14
     t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
         Format(Abs(prevNIM), "0.00") & "% in " & pLbl & " to " & _
         Format(Abs(currNIM), "0.00") & "% in " & mLbl & ") due to [UPDATE: reason]. "
     If normNIM > 0 Then
-        Dim normNIMDisplay As Double
-        normNIMDisplay = IIf(normNIM < 0.1, normNIM * 100, normNIM)
-        t = t & "Normalised NIM maintains at " & Format(normNIMDisplay, "0.00") & "%."
+        t = t & "Normalised NIM is " & Format(normNIM, "0.00") & "%."
+    Else
+        t = t & "Normalised NIM is [UPDATE: check Normalised NIM tab row 350]."
     End If
     t = t & vbNewLine & vbNewLine
 
