@@ -1159,12 +1159,17 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         FMS(niiVsBgtD) & ") offset by " & SW(nonNiiVsD) & " non-interest income of " & _
         FMS(nonNiiVsD) & "." & vbNewLine & vbNewLine
 
-    ' Section 2: NII — bracket shows YTD avg asset (col N row 11) vs budget,
-    '            and current month NIM (col N row 14) vs budget NIM (col W row 14)
+    ' Section 2: NII — auto-generate reason from ytdEOP vs bgtEOP and bracketNIM vs bgtNIM
+    Dim assetVolWord As String
+    assetVolWord = IIf(ytdEOP >= bgtEOP, "higher", "lower") & " avg asset volume"
+
+    Dim nimCompWord As String
+    nimCompWord = IIf(bracketNIM >= bgtNIM, "expanded", "compressed") & " NIM"
+
     t = t & "NII of " & FM(Abs(niiYTD)) & " was " & FM(Abs(niiVsBgtD)) & " " & _
-        AB(niiVsBgtD) & " budget due to [UPDATE: reason e.g. lower avg asset volume " & _
-        "(" & FB(Abs(ytdEOP)) & " vs " & FB(Abs(bgtEOP)) & " budget) and compressed NIM " & _
-        "(" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)]." & _
+        AB(niiVsBgtD) & " budget due to " & assetVolWord & _
+        " (" & FB(Abs(ytdEOP)) & " vs " & FB(Abs(bgtEOP)) & " budget) and " & nimCompWord & _
+        " (" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)." & _
         vbNewLine & vbNewLine
 
     ' Section 3: NIM MoM — curr = col I row 14; prev = dynamic prevCol row 14
