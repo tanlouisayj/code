@@ -1187,8 +1187,8 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Else
         eopConnector = "but"   ' opposite direction — contradiction worth flagging
     End If
-    t = t & "EOP Asset Balance " & GD(eopMoM) & " " & FM(Abs(eopMoM)) & " MoM to S" & _
-        FB(Abs(currEOP)) & ", " & eopConnector & " remained " & FM(Abs(eopVsD)) & " " & AB(eopVsD) & _
+    t = t & "EOP Asset Balance " & GD(eopMoM) & " " & FB(Abs(eopMoM)) & " MoM to S" & _
+        FB(Abs(currEOP)) & ", " & eopConnector & " remained " & FB(Abs(eopVsD)) & " " & AB(eopVsD) & _
         " budget (budget: " & FB(Abs(bgtEOP)) & "), resulting in a " & _
         IIf(eopVsD < 0, "drag on", "support for") & " average asset volume." & vbNewLine & vbNewLine
 
