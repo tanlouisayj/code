@@ -1,18 +1,9 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v13)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v12)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
-' CHANGES IN v13 (vs v12):
-'   - P2_BuildCommentary — Headcount section:
-'       * Was reading from dashWs (P&L_PF dashboard) row 68 — now correctly
-'         reads from plWs (P&L_PF tab) row 68, col I (9) for actual and
-'         col O (15) for budget, matching the cells you specified.
-'       * Also reads previous month headcount from prevCol for MoM comparison.
-'       * Sentence now directional:
-'           "increased by X MoM to Y; +Z vs Bgt"
-'           "decreased by X MoM to Y; -Z vs Bgt"
-'           "remained at Y; +/-Z vs Bgt"  (when no MoM change)
+' CHANGES IN v12 (vs v11):
 '   - P2_UpdateDCLinks + DiagnoseDCLinks:
 '       * ROOT CAUSE: row 8 header "Net Actual FY26 YTD(Apr)" in col 5 was
 '         matched first because it contains "Apr", so the code was writing
@@ -1138,12 +1129,13 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
     Dim dirExpVsD As Double: dirExpVsD = P2V(dashWs, 31, CR)
 
     ' ── Headcount ─────────────────────────────────────────────────────────────
-    ' Row 68 on P&L_PF tab: col I (9) = current month actual, col O (15) = budget
-    Const CI_HC As Long = 9   ' col I — current month headcount actual
-    Const CO_HC As Long = 15  ' col O — headcount budget
-    Dim hc      As Long: hc      = CLng(P2V(plWs, 68, CI_HC))
-    Dim hcBgt   As Long: hcBgt   = CLng(P2V(plWs, 68, CO_HC))
-    Dim hcPrev  As Long: hcPrev  = CLng(P2V(plWs, 68, prevCol))
+    ' Source: P&L_PF dashboard tab (dashWs), row 68
+    '   Col I (9)  = current month headcount actual
+    '   Col O (15) = headcount budget
+    '   prevCol    = previous month (for MoM comparison)
+    Dim hc      As Long: hc      = CLng(P2V(dashWs, 68, 9))
+    Dim hcBgt   As Long: hcBgt   = CLng(P2V(dashWs, 68, 15))
+    Dim hcPrev  As Long: hcPrev  = CLng(P2V(dashWs, 68, prevCol))
     Dim hcVsBgt As Long: hcVsBgt = hc - hcBgt
     Dim hcMoM   As Long: hcMoM   = hc - hcPrev
 
