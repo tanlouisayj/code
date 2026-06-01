@@ -1,20 +1,16 @@
 '=============================================================================
-' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v11)
+' PF FINANCIALS AUTOMATION - PART 2 MODULE  (v12)
 ' Paste into a NEW Module in VBA Editor (Insert > Module → Module2)
 ' Works alongside PF_Automation_v7 (Module1) — no changes to Module1 needed
 '=============================================================================
-' CHANGES IN v11 (vs v10):
-'   - P2_UpdateDCLinks:
-'       * ROOT CAUSE FOUND (from Log sheet): Row 30 formula is a SUM range:
-'           =SUM('\\server\[Direct Cost - Mar 26 - PF.xls]PF'!$Z$15:$Z$18)
-'         The old check (Left(srcF,2)="='") only matched simple cell refs so
-'         the SUM formula was always skipped — hence I30 always blank.
-'       * Fix: check is now Left(srcF,1)="=" AND InStr(srcF,"[")>0 which
-'         accepts both simple refs and SUM/other formula types.
-'       * New helper P2_AdvanceAllExtCols replaces P2_AdvanceExtColByN for
-'         this sub: walks the whole formula string after "!" and advances
-'         EVERY $COL$ pattern, so $Z$15:$Z$18 becomes $AA$15:$AA$18
-'         (both column refs in the range get advanced, not just the first).
+' CHANGES IN v12 (vs v11):
+'   - P2_UpdateDCLinks + DiagnoseDCLinks:
+'       * ROOT CAUSE: row 8 header "Net Actual FY26 YTD(Apr)" in col 5 was
+'         matched first because it contains "Apr", so the code was writing
+'         to the YTD column instead of the actual Apr monthly column.
+'       * Fix: column scan now skips any header containing "YTD", "MTD",
+'         "Budget", "Bgt", "Total", or "FY" — ensuring only the pure
+'         individual monthly column (e.g. col 9 "FY26 Apr") is matched.
 ' CHANGES IN v8 (vs v7):
 '   - P2_UpdateDCLinks (Step 3):
 '       * Completely rewrote row-29/30 write loop into two separate blocks.
@@ -676,13 +672,26 @@ Private Sub P2_UpdateDCLinks(plWs As Worksheet, yyyymm As Long)
     Dim prevMo   As String: prevMo   = Left(P2_MonthLabel(prevMM), 3)
 
     ' ── Find currCol and prevCol by scanning row 8 for month headers ──────────
+    ' IMPORTANT: skip any header that also contains "YTD", "Budget", "Bgt", "Total",
+    ' "FY", "MTD" — these are summary columns whose header happens to include the
+    ' month name (e.g. "YTD(Apr)") but are NOT the individual monthly columns.
     Dim currCol As Long: currCol = 0
     Dim prevCol As Long: prevCol = 0
     Dim c As Long
     For c = 1 To 40
         Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
+        If hdr = "" Then GoTo NextHdrCol
+        ' Skip summary/YTD/budget columns
+        If InStr(1, hdr, "YTD",    vbTextCompare) > 0 Then GoTo NextHdrCol
+        If InStr(1, hdr, "MTD",    vbTextCompare) > 0 Then GoTo NextHdrCol
+        If InStr(1, hdr, "Budget", vbTextCompare) > 0 Then GoTo NextHdrCol
+        If InStr(1, hdr, "Bgt",    vbTextCompare) > 0 Then GoTo NextHdrCol
+        If InStr(1, hdr, "Total",  vbTextCompare) > 0 Then GoTo NextHdrCol
+        If InStr(1, hdr, "FY",     vbTextCompare) > 0 Then GoTo NextHdrCol
+        ' Match month name — take first hit only
         If InStr(1, hdr, shortMo, vbTextCompare) > 0 And currCol = 0 Then currCol = c
         If InStr(1, hdr, prevMo,  vbTextCompare) > 0 And prevCol = 0 Then prevCol = c
+NextHdrCol:
     Next c
 
     ' Fallback: prevCol is just one to the left of currCol
@@ -883,8 +892,16 @@ Public Sub DiagnoseDCLinks()
     For c = 1 To 40
         Dim hdr As String: hdr = Trim(CStr(plWs.Cells(8, c).Value))
         If hdr <> "" Then colMap = colMap & "  col " & c & " = """ & hdr & """" & vbNewLine
+        ' Skip YTD/MTD/Budget/Total/FY summary columns
+        If InStr(1, hdr, "YTD",    vbTextCompare) > 0 Then GoTo NextDiagCol
+        If InStr(1, hdr, "MTD",    vbTextCompare) > 0 Then GoTo NextDiagCol
+        If InStr(1, hdr, "Budget", vbTextCompare) > 0 Then GoTo NextDiagCol
+        If InStr(1, hdr, "Bgt",    vbTextCompare) > 0 Then GoTo NextDiagCol
+        If InStr(1, hdr, "Total",  vbTextCompare) > 0 Then GoTo NextDiagCol
+        If InStr(1, hdr, "FY",     vbTextCompare) > 0 Then GoTo NextDiagCol
         If InStr(1, hdr, shortMo, vbTextCompare) > 0 And currCol = 0 Then currCol = c
         If InStr(1, hdr, prevMo,  vbTextCompare) > 0 And prevCol = 0 Then prevCol = c
+NextDiagCol:
     Next c
     If currCol = 0 Then currCol = 5 + (yyyymm Mod 100)
     If prevCol = 0 Then prevCol = currCol - 1
