@@ -1172,19 +1172,14 @@ Private Function P2_BuildCommentary(plWs As Worksheet, yyyymm As Long, normNIM A
         " (" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)." & _
         vbNewLine & vbNewLine
 
-    ' Section 3: NIM MoM — auto-generate reason from direction of change and vs budget
-    ' MoM reason: higher/lower funding cost or asset mix shift
-    ' vs budget reason: same nimCompWord already computed above
-    Dim nimMoMReason As String
-    If nimBps >= 0 Then
-        nimMoMReason = "higher asset yield and " & IIf(bracketNIM >= bgtNIM, "expanded", "improved") & " NIM vs budget"
-    Else
-        nimMoMReason = "higher funding cost and " & IIf(bracketNIM < bgtNIM, "compressed", "lower") & " NIM vs budget"
-    End If
-
+    ' Section 3: NIM MoM — state the facts (direction, bps, months, vs budget)
+    ' The actual cause (funding cost, asset mix, repricing etc) requires human judgement
+    ' so we just flag it as a short [UPDATE] for the analyst to complete in ~3 words
     t = t & "NIM " & ID(nimBps) & " " & Abs(nimBps) & "bps MoM (from " & _
         Format(Abs(prevNIM), "0.00") & "% in " & pLbl & " to " & _
-        Format(Abs(currNIM), "0.00") & "% in " & mLbl & ") due to " & nimMoMReason & ". "
+        Format(Abs(currNIM), "0.00") & "% in " & mLbl & "), " & nimCompWord & " vs budget" & _
+        " (" & Format(Abs(bracketNIM), "0.00") & "% vs " & Format(Abs(bgtNIM), "0.00") & "% budget)" & _
+        " due to [UPDATE]. "
     If normNIM > 0 Then
         t = t & "Normalised NIM is " & Format(normNIM, "0.00") & "%."
     Else
