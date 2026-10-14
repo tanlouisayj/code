@@ -1,0 +1,34 @@
+' ==== Paste this into ThisOutlookSession (Alt+F11 > Project1 > Microsoft Outlook Objects) ====
+' If ThisOutlookSession already has an Application_Startup, add the two lines from it into yours.
+
+Option Explicit
+
+Private WithEvents olReminders As Outlook.Reminders
+
+' When Outlook opens: hook the reminders and catch up on today's sweep if it hasn't run
+Private Sub Application_Startup()
+    Set olReminders = Application.Reminders
+    SweepIfDue
+End Sub
+
+' The daily/weekly calendar reminders trigger the macros
+Private Sub Application_Reminder(ByVal Item As Object)
+    On Error Resume Next
+    Select Case Item.Subject
+        Case SWEEP_SUBJECT
+            DoSweep True
+        Case DIGEST_SUBJECT
+            SendDigest
+    End Select
+End Sub
+
+' Hide the reminder pop-ups for these two so they don't interrupt you
+Private Sub olReminders_BeforeReminderShow(Cancel As Boolean)
+    Dim r As Outlook.Reminder
+    On Error Resume Next
+    For Each r In olReminders
+        If r.IsVisible Then
+            If r.Caption = SWEEP_SUBJECT Or r.Caption = DIGEST_SUBJECT Then r.Dismiss
+        End If
+    Next r
+End Sub
