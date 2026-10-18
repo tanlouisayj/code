@@ -48,7 +48,7 @@ Public Const DIGEST_TO As String = "name1@company.com; name2@company.com"
 Public Const DIGEST_CC As String = ""
 Public Const DIGEST_AUTO_SEND As Boolean = False  ' False = opens a draft for you to check and send
 Public Const DIGEST_LOOKBACK_DAYS As Long = 7     ' "booked to P&L in the last X days"
-Public Const LOG_LINK As String = ""              ' optional: SharePoint link to the log for the email
+Public Const LOG_LINK As String = ""              ' optional: overrides the automatic link to the log
 
 ' Schedule (used by SetupSchedule)
 Public Const SWEEP_TIME As String = "08:30"       ' daily sweep, Mon-Fri
@@ -518,7 +518,7 @@ Public Sub SendDigest()
     Dim data As Variant, r As Long, lastRow As Long
     Dim upcoming As New Collection, recent As New Collection
     Dim st As String, bk As String, mail As Object, body As String, errMsg As String
-    Dim plLatest As Object
+    Dim plLatest As Object, logUrl As String
 
     On Error GoTo Fail
     Set ws = OpenLog(xl, wb, xlCreated, wbOpened)
@@ -563,7 +563,8 @@ Public Sub SendDigest()
         BuildSection(upcoming, "Fees to expect (booked to AP, pending syndication)", _
             "Shown until a later fee form for the same borrower books the fee to P&L.") & _
         BuildSection(recent, "Fees booked to P&L in the last " & DIGEST_LOOKBACK_DAYS & " days", "")
-    If Len(LOG_LINK) > 0 Then body = body & "<p>Full log: <a href=""" & LOG_LINK & """>SLS Fee Log</a></p>"
+    logUrl = LogLinkUrl(wb)
+    If Len(logUrl) > 0 Then body = body & "<p>Full log: <a href=""" & logUrl & """>SLS Fee Log</a></p>"
     body = body & "<p style=""color:#777777;font-size:9pt"">Generated automatically from SLS fee forms. " & _
         "Please reply if anything looks wrong.</p></div>"
 
@@ -589,6 +590,24 @@ Cleanup:
     If Len(errMsg) > 0 Then MsgBox "The SLS fee digest stopped with an error:" & vbCrLf & errMsg, _
         vbExclamation, "SLS fee digest"
 End Sub
+
+' Link to the Excel log for the digest. Uses LOG_LINK if you set one; otherwise the web
+' address Excel reports for a OneDrive/SharePoint-synced file; otherwise a network-drive link.
+Private Function LogLinkUrl(ByVal wb As Object) As String
+    Dim u As String
+    If Len(LOG_LINK) > 0 Then
+        LogLinkUrl = LOG_LINK
+        Exit Function
+    End If
+    On Error Resume Next
+    u = wb.FullName
+    On Error GoTo 0
+    If LCase$(Left$(u, 4)) = "http" Then
+        LogLinkUrl = u
+    ElseIf Left$(LOG_PATH, 2) = "\\" Then
+        LogLinkUrl = "file:///" & Replace(Replace(LOG_PATH, "\", "/"), " ", "%20")
+    End If
+End Function
 
 ' Array(form date, borrower, segment, OIC/2IC, GL name, ccy, amount)
 Private Function DigestLine(d As Variant, ByVal r As Long) As Variant
