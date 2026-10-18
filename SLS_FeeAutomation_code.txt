@@ -621,7 +621,7 @@ Public Sub SendDigest()
         ReDim plAmt(1 To UBound(data, 1))
         For r = 1 To UBound(data, 1)
             If IsNumeric(data(r, 11)) Then remain(r) = CDbl(data(r, 11))
-            If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) And IsNumeric(data(r, 11)) Then
+            If Left$(EffectiveStatus(data, r), 12) = "Consolidated" And IsDate(data(r, 2)) And IsNumeric(data(r, 11)) Then
                 nPL = nPL + 1
                 plKey(nPL) = LCase$(Trim$(CStr(data(r, 5)))) & "|" & UCase$(Trim$(CStr(data(r, 10))))
                 plDate(nPL) = CDate(data(r, 2))
@@ -629,7 +629,7 @@ Public Sub SendDigest()
             End If
         Next r
         For r = 1 To UBound(data, 1)
-            If Left$(CStr(data(r, 12)), 8) = "Upcoming" And IsDate(data(r, 2)) And remain(r) > 0 Then
+            If Left$(EffectiveStatus(data, r), 8) = "Upcoming" And IsDate(data(r, 2)) And remain(r) > 0 Then
                 ck = LCase$(Trim$(CStr(data(r, 5)))) & "|" & UCase$(Trim$(CStr(data(r, 10))))
                 leftAmt = remain(r)
                 For i = 1 To nPL
@@ -647,7 +647,7 @@ Public Sub SendDigest()
 
         For r = 1 To UBound(data, 1)
             If InDigestWindow(data(r, 3), fromDate) Then
-                st = CStr(data(r, 12))
+                st = EffectiveStatus(data, r)
                 If Left$(st, 8) = "Upcoming" Then
                     If remain(r) > 0.005 Or Not IsNumeric(data(r, 11)) Then
                         upcoming.Add DigestLine(data, r, remain(r))
@@ -697,6 +697,18 @@ Cleanup:
     If Len(errMsg) > 0 Then MsgBox "The SLS fee digest stopped with an error:" & vbCrLf & errMsg, _
         vbExclamation, "SLS fee digest"
 End Sub
+
+' Status used by the digest. It follows the GL account in the log (so a change to the AP list
+' applies to rows already logged); rows with no GL keep the status written in the log.
+Private Function EffectiveStatus(ByRef d As Variant, ByVal r As Long) As String
+    Dim gl As String
+    gl = Trim$(CStr(d(r, 8)))
+    If Len(gl) = 0 Then
+        EffectiveStatus = CStr(d(r, 12))
+    Else
+        EffectiveStatus = FeeStatus(gl)
+    End If
+End Function
 
 ' True if the form date is on/after fromDate (a form whose date couldn't be read is kept in)
 Private Function InDigestWindow(ByVal v As Variant, ByVal fromDate As Date) As Boolean
