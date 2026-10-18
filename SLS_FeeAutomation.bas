@@ -45,6 +45,12 @@ Public Const LOOKBACK_DAYS As Long = 30          ' how far back each sweep looks
 ' Folder where the PDFs are saved (created automatically)
 Public Const PDF_FOLDER As String = "C:\SLS Fee Forms\PDFs\"
 
+' Optional: the SharePoint/OneDrive web address of that SAME folder. If set, the "Source PDF"
+' column becomes a clickable link to each PDF online. PDF_FOLDER must be a OneDrive/SharePoint
+' synced folder for this to work, e.g.
+' "https://yourcompany-my.sharepoint.com/personal/you_company_com/Documents/Fee Forms/SLS Fee Forms"
+Public Const PDF_WEB_FOLDER As String = ""
+
 ' The Excel log. Any of these work:
 '   - a local path:            "C:\SLS Fee Forms\SLS Fee Log.xlsx"
 '   - a OneDrive-synced path:  "C:\Users\you\OneDrive - Company\Team Site - Documents\SLS Fee Log.xlsx"
@@ -189,12 +195,14 @@ Private Function LogForm(ByVal pdfPath As String, ByVal m As Object, ByVal wdApp
     If f("lines").Count = 0 Then
         WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
             f("deal"), f("oic"), "", "", "", "", "Needs review", chk, pdfPath, m.Subject)
+        LinkSource ws, pdfPath
         nRows = nRows + 1
     Else
         For Each ln In f("lines")
             WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
                 f("deal"), f("oic"), ln(0), ln(1), ln(2), ln(3), FeeStatus(CStr(ln(0))), chk, _
                 pdfPath, m.Subject)
+            LinkSource ws, pdfPath
             nRows = nRows + 1
         Next ln
     End If
@@ -584,8 +592,7 @@ Public Sub SendDigest()
     body = "<div style=""font-family:Calibri,Arial,sans-serif;font-size:11pt"">" & _
         "<p>Hi all,</p><p>Here are the SLS loan fees on fee forms dated " & fromTxt & " onwards.</p>" & _
         BuildSection(toPL, "Fees to be booked to P&L (" & fromTxt & " onwards)", "") & _
-        BuildSection(upcoming, "Fees in Accounts Payable, pending syndication (" & fromTxt & " onwards)", _
-            "Shown until a later fee form for the same borrower books the fee to P&L.")
+        BuildSection(upcoming, "Fees in Accounts Payable, pending syndication (" & fromTxt & " onwards)", "")
     logUrl = LogLinkUrl(wb)
     If Len(logUrl) > 0 Then body = body & "<p>Full log: <a href=""" & logUrl & """>SLS Fee Log</a></p>"
     body = body & "<p style=""color:#777777;font-size:9pt"">Generated automatically from SLS fee forms.</p></div>"
@@ -913,6 +920,33 @@ Private Function OpenPdfInWord(ByVal wdApp As Object, ByVal p As String) As Obje
         Sleep 2000
     Next tries
     Err.Raise n, "OpenPdfInWord", d
+End Function
+
+' If PDF_WEB_FOLDER is set, turns the Source PDF cell of the row just written into a
+' clickable link to the file on SharePoint/OneDrive (showing the file name)
+Private Sub LinkSource(ByVal ws As Object, ByVal pdfPath As String)
+    Dim r As Long, fn As String, u As String
+    If Len(PDF_WEB_FOLDER) = 0 Then Exit Sub
+    On Error Resume Next
+    r = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row
+    fn = Mid$(pdfPath, InStrRev(pdfPath, "\") + 1)
+    u = Replace(PDF_WEB_FOLDER, " ", "%20")
+    Do While Right$(u, 1) = "/" Or Right$(u, 1) = "\"
+        u = Left$(u, Len(u) - 1)
+    Loop
+    u = u & "/" & EncodeUrlPart(fn)
+    ws.Hyperlinks.Add Anchor:=ws.Cells(r, 14), Address:=u, TextToDisplay:=fn
+    On Error GoTo 0
+End Sub
+
+Private Function EncodeUrlPart(ByVal s As String) As String
+    s = Replace(s, "%", "%25")
+    s = Replace(s, " ", "%20")
+    s = Replace(s, "#", "%23")
+    s = Replace(s, "?", "%3F")
+    s = Replace(s, "&", "%26")
+    s = Replace(s, "+", "%2B")
+    EncodeUrlPart = s
 End Function
 
 Private Sub WriteRow(ByVal ws As Object, ByVal v As Variant)
