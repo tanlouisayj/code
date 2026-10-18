@@ -255,7 +255,9 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
     Dim vals As Collection, lines As Collection, rc As Collection
     Dim rowMap As Object, k As Variant
     Dim s As String, rowTxt As String, j As Long, glIdx As Long
-    Dim amt As Double, total As Double, sumLines As Double, hasTotal As Boolean
+    Dim amt As Double, sv As Double, hasTotal As Boolean, anyNum As Boolean
+    Dim rr As Collection, ccyL As Collection, amtL As Collection
+    Dim sums As Object, totals As Object, p As Long, cc As String, s2 As String
     Dim check As String, errD As String
     Dim lbl As String, v As String
 
@@ -308,42 +310,61 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
         check = AddNote(check, "Header table not found")
     End If
 
-    ' Fee table: group cells by row (works even with merged cells)
+    ' Fee table: group cells by row (works even with merged cells).
+    ' A Ccy / Amount box can stack two currencies, so each box is split into its lines
+    ' and every currency becomes its own row in the log.
     If Not fee Is Nothing Then
         Set rowMap = CreateObject("Scripting.Dictionary")
+        Set sums = CreateObject("Scripting.Dictionary")
+        Set totals = CreateObject("Scripting.Dictionary")
         For Each c In fee.Range.Cells
             If Not rowMap.Exists(c.RowIndex) Then rowMap.Add c.RowIndex, New Collection
-            rowMap(c.RowIndex).Add CleanCell(c.Range.Text)
+            rowMap(c.RowIndex).Add c.Range.Text
         Next c
 
         For Each k In rowMap.Keys
-            Set rc = rowMap(k)
-            If rc.Count >= 3 Then
+            Set rr = rowMap(k)
+            If rr.Count >= 3 Then
                 glIdx = 0
                 rowTxt = ""
-                For j = 1 To rc.Count
-                    rowTxt = rowTxt & " " & LCase$(rc(j))
-                    If glIdx = 0 And IsGLAccount(rc(j)) Then glIdx = j
+                For j = 1 To rr.Count
+                    s2 = CleanCell(rr(j))
+                    rowTxt = rowTxt & " " & LCase$(s2)
+                    If glIdx = 0 And IsGLAccount(s2) Then glIdx = j
                 Next j
 
-                ' Last cell = amount, second-last = currency; "-" rows are skipped
-                If TryNumber(rc(rc.Count), amt) Then
-                    If glIdx > 0 Then
-                        If glIdx + 3 <= rc.Count Then
-                            If amt <> 0 Then
-                                lines.Add Array(rc(glIdx), rc(glIdx + 1), rc(rc.Count - 1), amt)
-                                sumLines = sumLines + amt
+                ' Last box = amount(s), second-last box = currency(ies); "-" boxes are skipped
+                Set ccyL = SplitCell(rr(rr.Count - 1))
+                Set amtL = SplitCell(rr(rr.Count))
+                anyNum = False
+                For p = 1 To amtL.Count
+                    If TryNumber(amtL(p), amt) Then anyNum = True
+                Next p
+
+                If anyNum Then
+                    If glIdx > 0 And glIdx + 3 > rr.Count Then
+                        check = AddNote(check, "Row for GL " & CleanCell(rr(glIdx)) & " not read clearly")
+                    ElseIf ccyL.Count <> amtL.Count And ccyL.Count <> 1 Then
+                        check = AddNote(check, "Currency and amount lines don't match in one row")
+                    Else
+                        For p = 1 To amtL.Count
+                            If TryNumber(amtL(p), amt) Then
+                                If ccyL.Count = 1 Then cc = ccyL(1) Else cc = ccyL(p)
+                                cc = UCase$(Trim$(cc))
+                                If amt <> 0 Then
+                                    If glIdx > 0 Then
+                                        lines.Add Array(CleanCell(rr(glIdx)), CleanCell(rr(glIdx + 1)), cc, amt)
+                                        sums(cc) = sums(cc) + amt
+                                    ElseIf InStr(rowTxt, "total") > 0 Then
+                                        totals(cc) = amt
+                                        hasTotal = True
+                                    ElseIf InStr(rowTxt, "gst") > 0 Then
+                                        lines.Add Array("GST", "GST", cc, amt)
+                                        sums(cc) = sums(cc) + amt
+                                    End If
+                                End If
                             End If
-                        Else
-                            check = AddNote(check, "Row for GL " & rc(glIdx) & " not read clearly")
-                        End If
-                    ElseIf InStr(rowTxt, "total") > 0 Then
-                        total = amt: hasTotal = True
-                    ElseIf InStr(rowTxt, "gst") > 0 Then
-                        If amt <> 0 Then
-                            lines.Add Array("GST", "GST", rc(rc.Count - 1), amt)
-                            sumLines = sumLines + amt
-                        End If
+                        Next p
                     End If
                 End If
             End If
@@ -358,8 +379,15 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
     ' Sanity checks
     If lines.Count = 0 Then check = AddNote(check, "No fee amounts found")
     If hasTotal Then
-        If Abs(sumLines - total) > 0.01 Then check = AddNote(check, "Lines add to " & _
-            Format(sumLines, "#,##0.00") & " but form total is " & Format(total, "#,##0.00"))
+        For Each k In totals.Keys
+            sv = 0
+            If sums.Exists(k) Then sv = sums(k)
+            If Abs(sv - totals(k)) > 0.01 Then check = AddNote(check, k & " lines add to " & _
+                Format(sv, "#,##0.00") & " but form total is " & Format(totals(k), "#,##0.00"))
+        Next k
+        For Each k In sums.Keys
+            If Not totals.Exists(k) Then check = AddNote(check, "No " & k & " total on the form")
+        Next k
     ElseIf lines.Count > 0 Then
         check = AddNote(check, "Total not found")
     End If
@@ -395,6 +423,32 @@ Private Sub ParseToLine(ByVal s As String, ByVal res As Object)
         End If
     Next i
 End Sub
+
+' Splits one table box into its separate lines (a box can stack two currencies or amounts)
+Private Function SplitCell(ByVal raw As String) As Collection
+    Dim out As New Collection, parts() As String, i As Long, s As String
+    raw = Replace(raw, Chr(13) & Chr(7), "")
+    raw = Replace(raw, Chr(7), "")
+    raw = Replace(raw, Chr(13), "|")
+    raw = Replace(raw, Chr(11), "|")
+    raw = Replace(raw, vbLf, "|")
+    parts = Split(raw, "|")
+    For i = 0 To UBound(parts)
+        s = CleanCell(parts(i))
+        If Len(s) > 0 Then out.Add s
+    Next i
+    ' Two values wrapped onto one line, e.g. "AUD USD" or "450,000 200,000"
+    If out.Count = 1 Then
+        If InStr(out(1), " ") > 0 Then
+            parts = Split(out(1), " ")
+            Set out = New Collection
+            For i = 0 To UBound(parts)
+                If Len(parts(i)) > 0 Then out.Add parts(i)
+            Next i
+        End If
+    End If
+    Set SplitCell = out
+End Function
 
 ' Removes Word cell markers, line breaks and footnote markers like (3)
 Private Function CleanCell(ByVal s As String) As String
