@@ -25,6 +25,7 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '   TestOnePdf     - test the PDF reading on one saved form
 '   RunSweepNow    - run the sweep now
 '   SendDigest     - build the digest email now
+'   DigestIfDue    - send the digest if its scheduled time has passed and it hasn't gone out
 '   SetupSchedule  - create the daily/weekly reminders (run once)
 '   ResetLoggedFlags - make the sweep re-log recent emails (after starting a new log)
 ' ====================================================================
@@ -532,6 +533,31 @@ End Sub
 '  DIGEST EMAIL
 ' ========================================================================
 
+' Sends the digest if its scheduled time has passed and it hasn't gone out since.
+' Called at Outlook start-up and by the scheduled reminder, so opening Outlook late
+' (e.g. at 9:05) still sends it, and it is never sent twice for the same slot.
+Public Sub DigestIfDue()
+    Dim last As String, dueAt As Date, d As Long, dt As Date, bit As Long
+    last = GetSetting(APP_KEY, "Run", "LastDigest", "")
+    If Len(last) = 0 Then
+        ' First time: start counting from now, so nothing is sent by surprise
+        SaveSetting APP_KEY, "Run", "LastDigest", Format(Now, "yyyy-mm-dd hh:nn:ss")
+        Exit Sub
+    End If
+    ' Find the most recent scheduled slot that has already passed
+    For d = 0 To 7
+        dt = Date - d
+        bit = CLng(2 ^ (Weekday(dt, vbSunday) - 1))      ' Sun=1, Mon=2, Tue=4 ...
+        If (DIGEST_DAY_MASK And bit) <> 0 Then
+            dueAt = dt + TimeValue(DIGEST_TIME)
+            If dueAt <= Now Then
+                If CDate(last) < dueAt Then SendDigest
+                Exit For
+            End If
+        End If
+    Next d
+End Sub
+
 Public Sub SendDigest()
     Dim xl As Object, wb As Object, ws As Object, xlCreated As Boolean, wbOpened As Boolean
     Dim data As Variant, r As Long, lastRow As Long, fromDate As Date
@@ -587,7 +613,10 @@ Public Sub SendDigest()
     End If
 
     ' Nothing to report: don't send an empty email by itself
-    If DIGEST_AUTO_SEND And DIGEST_SKIP_IF_EMPTY And upcoming.Count = 0 And toPL.Count = 0 Then GoTo Cleanup
+    If DIGEST_AUTO_SEND And DIGEST_SKIP_IF_EMPTY And upcoming.Count = 0 And toPL.Count = 0 Then
+        SaveSetting APP_KEY, "Run", "LastDigest", Format(Now, "yyyy-mm-dd hh:nn:ss")
+        GoTo Cleanup
+    End If
 
     body = "<div style=""font-family:Calibri,Arial,sans-serif;font-size:11pt"">" & _
         "<p>Hi all,</p><p>Here are the SLS loan fees on fee forms dated " & fromTxt & " onwards.</p>" & _
@@ -604,6 +633,7 @@ Public Sub SendDigest()
         " | In AP: " & upcoming.Count
     mail.HTMLBody = body
     If DIGEST_AUTO_SEND Then mail.Send Else mail.Display
+    SaveSetting APP_KEY, "Run", "LastDigest", Format(Now, "yyyy-mm-dd hh:nn:ss")
     GoTo Cleanup
 
 Fail:

@@ -5,10 +5,11 @@ Option Explicit
 
 Private WithEvents olReminders As Outlook.Reminders
 
-' When Outlook opens: hook the reminders and catch up on today's sweep if it hasn't run
+' When Outlook opens: hook the reminders and catch up on today's sweep and the digest if they haven't run
 Private Sub Application_Startup()
     Set olReminders = Application.Reminders
     SweepIfDue
+    DigestIfDue
 End Sub
 
 ' The daily/weekly calendar reminders trigger the macros
@@ -18,7 +19,7 @@ Private Sub Application_Reminder(ByVal Item As Object)
         Case SWEEP_SUBJECT
             DoSweep True
         Case DIGEST_SUBJECT
-            SendDigest
+            DigestIfDue
     End Select
 End Sub
 
