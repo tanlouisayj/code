@@ -10,7 +10,8 @@ Option Explicit
 '      fee line into an Excel log. Processed emails get the Outlook
 '      category "SLS Logged" so they are never logged twice.
 '   2. Digest (weekly by default): emails a summary of
-'        - fees to expect (GL 20122122, booked to AP, pending syndication)
+'        - fees to expect (GL 20122122, booked to AP; dropped once a later form for
+'          the same borrower books a P&L fee)
 '        - fees booked to P&L in the last 7 days
 '
 '  Macros you can run by hand (Alt+F8 in Outlook):
@@ -64,12 +65,12 @@ Private Const CAT_REVIEW As String = "SLS Review"
 Private Const AP_GL As String = "20122122"
 Private Const APP_KEY As String = "SLSFeeAutomation"
 Private Const XL_UP As Long = -4162
-Private Const COLS As Long = 16
+Private Const COLS As Long = 15
 
 Private Function LogHeaders() As Variant
     LogHeaders = Array("Logged On", "Email Received", "Form Date", "Segment", _
         "Borrower", "Deal Details", "Syndications OIC/2IC", "GL A/c", "GL Name", "Ccy", "Amount", _
-        "Status", "Cleared (Y/N)", "Check", "Source PDF", "Email Subject")
+        "Status", "Check", "Source PDF", "Email Subject")
 End Function
 
 ' ========================================================================
@@ -176,12 +177,12 @@ Private Function LogForm(ByVal pdfPath As String, ByVal m As Object, ByVal wdApp
 
     If f("lines").Count = 0 Then
         WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
-            f("deal"), f("oic"), "", "", "", "", "Needs review", "", chk, pdfPath, m.Subject)
+            f("deal"), f("oic"), "", "", "", "", "Needs review", chk, pdfPath, m.Subject)
         nRows = nRows + 1
     Else
         For Each ln In f("lines")
             WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
-                f("deal"), f("oic"), ln(0), ln(1), ln(2), ln(3), FeeStatus(CStr(ln(0))), "", chk, _
+                f("deal"), f("oic"), ln(0), ln(1), ln(2), ln(3), FeeStatus(CStr(ln(0))), chk, _
                 pdfPath, m.Subject)
             nRows = nRows + 1
         Next ln
@@ -516,18 +517,39 @@ Public Sub SendDigest()
     Dim xl As Object, wb As Object, ws As Object, xlCreated As Boolean, wbOpened As Boolean
     Dim data As Variant, r As Long, lastRow As Long
     Dim upcoming As New Collection, recent As New Collection
-    Dim st As String, cl As String, mail As Object, body As String, errMsg As String
+    Dim st As String, bk As String, mail As Object, body As String, errMsg As String
+    Dim plLatest As Object
 
     On Error GoTo Fail
     Set ws = OpenLog(xl, wb, xlCreated, wbOpened)
     lastRow = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row
     If lastRow >= 2 Then
         data = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, COLS)).Value
+        ' Latest P&L form per borrower. A later P&L form for the same borrower means
+        ' syndication has completed, so the earlier AP fee is no longer "to expect".
+        Set plLatest = CreateObject("Scripting.Dictionary")
+        For r = 1 To UBound(data, 1)
+            If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) Then
+                bk = LCase$(Trim$(CStr(data(r, 5))))
+                If Len(bk) > 0 Then
+                    If Not plLatest.Exists(bk) Then
+                        plLatest(bk) = CDate(data(r, 2))
+                    ElseIf CDate(data(r, 2)) > plLatest(bk) Then
+                        plLatest(bk) = CDate(data(r, 2))
+                    End If
+                End If
+            End If
+        Next r
+
         For r = 1 To UBound(data, 1)
             st = CStr(data(r, 12))
-            cl = UCase$(Trim$(CStr(data(r, 13))))
             If Left$(st, 8) = "Upcoming" Then
-                If cl <> "Y" And cl <> "YES" Then upcoming.Add DigestLine(data, r)
+                bk = LCase$(Trim$(CStr(data(r, 5))))
+                If Not (plLatest.Exists(bk) And IsDate(data(r, 2))) Then
+                    upcoming.Add DigestLine(data, r)
+                ElseIf plLatest(bk) <= CDate(data(r, 2)) Then
+                    upcoming.Add DigestLine(data, r)
+                End If
             ElseIf Left$(st, 12) = "Consolidated" Then
                 If IsDate(data(r, 1)) Then
                     If CDate(data(r, 1)) >= Date - DIGEST_LOOKBACK_DAYS Then recent.Add DigestLine(data, r)
@@ -539,7 +561,7 @@ Public Sub SendDigest()
     body = "<div style=""font-family:Calibri,Arial,sans-serif;font-size:11pt"">" & _
         "<p>Hi all,</p><p>Here is the latest summary of SLS loan fees from the fee forms received.</p>" & _
         BuildSection(upcoming, "Fees to expect (booked to AP, pending syndication)", _
-            "These are reversed to P&L once syndication completes.") & _
+            "Shown until a later fee form for the same borrower books the fee to P&L.") & _
         BuildSection(recent, "Fees booked to P&L in the last " & DIGEST_LOOKBACK_DAYS & " days", "")
     If Len(LOG_LINK) > 0 Then body = body & "<p>Full log: <a href=""" & LOG_LINK & """>SLS Fee Log</a></p>"
     body = body & "<p style=""color:#777777;font-size:9pt"">Generated automatically from SLS fee forms. " & _
@@ -744,12 +766,12 @@ Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated
         ws.Range("C:C").NumberFormat = "dd-mmm-yyyy"
         ws.Range("H:H").NumberFormat = "@"
         ws.Range("K:K").NumberFormat = "#,##0.00"
-        ws.Range("A:P").ColumnWidth = 16
+        ws.Range("A:O").ColumnWidth = 16
         ws.Range("D:D").ColumnWidth = 40
         ws.Range("F:F").ColumnWidth = 50
         ws.Range("G:G").ColumnWidth = 28
-        ws.Range("N:N").ColumnWidth = 30
-    ElseIf CStr(ws.Cells(1, 4).Value) <> "Segment" Then
+        ws.Range("M:M").ColumnWidth = 30
+    ElseIf CStr(ws.Cells(1, 13).Value) <> "Check" Then
         Err.Raise vbObjectError + 1000, "SLS_FeeAutomation", _
             "The Excel log still has the old column layout. Rename or move the old log file " & _
             "(or clear the sheet) and run again, so a log with the new columns is created."
