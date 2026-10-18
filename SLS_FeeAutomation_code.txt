@@ -19,7 +19,7 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '      month and in future months, grouped by month:
 '        - fees to be booked to P&L
 '        - fees sitting in Accounts Payable (GL 20122122); dropped once a later form
-'          for the same borrower books the same amount to P&L
+'          for the same borrower books the amount to P&L (part-cleared AP shows what is left)
 '
 '  Macros you can run by hand (Alt+F8 in Outlook):
 '   TestOnePdf     - test the PDF reading on one saved form
@@ -563,8 +563,9 @@ Public Sub SendDigest()
     Dim data As Variant, r As Long, lastRow As Long, fromDate As Date
     Dim upcoming As New Collection, toPL As New Collection
     Dim st As String, bk As String, mail As Object, body As String, errMsg As String
-    Dim plLatest As Object, plSums As Object, logUrl As String, fromTxt As String
-    Dim ck As String, apDate As Date
+    Dim logUrl As String, fromTxt As String
+    Dim remain() As Double, nPL As Long, plKey() As String, plDate() As Date, plAmt() As Double
+    Dim i As Long, take As Double, leftAmt As Double, ck As String
 
     On Error GoTo Fail
     If DIGEST_AUTO_SEND And InStr(1, DIGEST_TO, "name1@company.com", vbTextCompare) > 0 Then
@@ -580,43 +581,45 @@ Public Sub SendDigest()
     lastRow = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row
     If lastRow >= 2 Then
         data = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, COLS)).Value
-        ' An AP fee is cleared when a LATER P&L form for the same borrower books the same
-        ' amount in the same currency. The match is tried on each P&L line, and on the P&L
-        ' total per currency for that form (in case the AP amount was split over several fees).
-        Set plLatest = CreateObject("Scripting.Dictionary")
-        Set plSums = CreateObject("Scripting.Dictionary")
+        ' AP fees are reduced by later P&L fees for the same borrower and currency.
+        ' P&L amounts booked on a LATER form are applied against the AP lines, oldest first.
+        ' A part-cleared AP line shows only what is left; a fully cleared one drops off.
+        ReDim remain(1 To UBound(data, 1))
+        ReDim plKey(1 To UBound(data, 1))
+        ReDim plDate(1 To UBound(data, 1))
+        ReDim plAmt(1 To UBound(data, 1))
         For r = 1 To UBound(data, 1)
+            If IsNumeric(data(r, 11)) Then remain(r) = CDbl(data(r, 11))
             If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) And IsNumeric(data(r, 11)) Then
-                bk = LCase$(Trim$(CStr(data(r, 5))))
-                If Len(bk) > 0 Then
-                    ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 2)), "0.00000")
-                    plSums(ck) = plSums(ck) + CDbl(data(r, 11))
-                    ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 11)), "0.00")
-                    NoteLatest plLatest, ck, CDate(data(r, 2))
-                End If
+                nPL = nPL + 1
+                plKey(nPL) = LCase$(Trim$(CStr(data(r, 5)))) & "|" & UCase$(Trim$(CStr(data(r, 10))))
+                plDate(nPL) = CDate(data(r, 2))
+                plAmt(nPL) = CDbl(data(r, 11))
             End If
         Next r
-        Dim sk As Variant, parts() As String
-        For Each sk In plSums.Keys
-            parts = Split(CStr(sk), "|")
-            ck = parts(0) & "|" & parts(1) & "|" & Format(plSums(sk), "0.00")
-            NoteLatest plLatest, ck, CDate(CDbl(parts(2)))
-        Next sk
+        For r = 1 To UBound(data, 1)
+            If Left$(CStr(data(r, 12)), 8) = "Upcoming" And IsDate(data(r, 2)) And remain(r) > 0 Then
+                ck = LCase$(Trim$(CStr(data(r, 5)))) & "|" & UCase$(Trim$(CStr(data(r, 10))))
+                leftAmt = remain(r)
+                For i = 1 To nPL
+                    If leftAmt <= 0.005 Then Exit For
+                    If plKey(i) = ck And plAmt(i) > 0.005 And plDate(i) > CDate(data(r, 2)) Then
+                        take = plAmt(i)
+                        If take > leftAmt Then take = leftAmt
+                        leftAmt = leftAmt - take
+                        plAmt(i) = plAmt(i) - take
+                    End If
+                Next i
+                remain(r) = leftAmt
+            End If
+        Next r
 
         For r = 1 To UBound(data, 1)
             If InDigestWindow(data(r, 3), fromDate) Then
                 st = CStr(data(r, 12))
                 If Left$(st, 8) = "Upcoming" Then
-                    bk = LCase$(Trim$(CStr(data(r, 5))))
-                    ck = ""
-                    If IsNumeric(data(r, 11)) Then _
-                        ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 11)), "0.00")
-                    If Len(ck) = 0 Or Not IsDate(data(r, 2)) Then
-                        upcoming.Add DigestLine(data, r)
-                    ElseIf Not plLatest.Exists(ck) Then
-                        upcoming.Add DigestLine(data, r)
-                    ElseIf plLatest(ck) <= CDate(data(r, 2)) Then
-                        upcoming.Add DigestLine(data, r)
+                    If remain(r) > 0.005 Or Not IsNumeric(data(r, 11)) Then
+                        upcoming.Add DigestLine(data, r, remain(r))
                     End If
                 ElseIf Left$(st, 12) = "Consolidated" Then
                     toPL.Add DigestLine(data, r)
@@ -664,15 +667,6 @@ Cleanup:
         vbExclamation, "SLS fee digest"
 End Sub
 
-' Keeps the latest date seen for a key
-Private Sub NoteLatest(ByVal d As Object, ByVal k As String, ByVal v As Date)
-    If Not d.Exists(k) Then
-        d(k) = v
-    ElseIf v > d(k) Then
-        d(k) = v
-    End If
-End Sub
-
 ' True if the form date is on/after fromDate (a form whose date couldn't be read is kept in)
 Private Function InDigestWindow(ByVal v As Variant, ByVal fromDate As Date) As Boolean
     If IsDate(v) Then InDigestWindow = (CDate(v) >= fromDate) Else InDigestWindow = True
@@ -699,7 +693,7 @@ Private Function LogLinkUrl(ByVal wb As Object) As String
 End Function
 
 ' Array(form date, borrower, segment, OIC/2IC, GL name, ccy, amount, sort key, month label)
-Private Function DigestLine(d As Variant, ByVal r As Long) As Variant
+Private Function DigestLine(d As Variant, ByVal r As Long, Optional ByVal amtOverride As Double = -1) As Variant
     Dim fd As String, amt As Double, sk As Double, ml As String
     If IsDate(d(r, 3)) Then
         fd = Format(CDate(d(r, 3)), "dd-mmm-yyyy")
@@ -711,6 +705,7 @@ Private Function DigestLine(d As Variant, ByVal r As Long) As Variant
         ml = "Form date not read"
     End If
     If IsNumeric(d(r, 11)) Then amt = CDbl(d(r, 11))
+    If amtOverride >= 0 And IsNumeric(d(r, 11)) Then amt = amtOverride
     DigestLine = Array(fd, CStr(d(r, 5)), CStr(d(r, 4)), CStr(d(r, 7)), CStr(d(r, 9)), CStr(d(r, 10)), amt, sk, ml)
 End Function
 
