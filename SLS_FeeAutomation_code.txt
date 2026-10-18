@@ -38,8 +38,11 @@ Public Const LOOKBACK_DAYS As Long = 30          ' how far back each sweep looks
 ' Folder where the PDFs are saved (created automatically)
 Public Const PDF_FOLDER As String = "C:\SLS Fee Forms\PDFs\"
 
-' The Excel log. For a SharePoint/Teams file, use its OneDrive-SYNCED path,
-' e.g. "C:\Users\you\OneDrive - Company\Team Site - Documents\SLS Fee Log.xlsx"
+' The Excel log. Any of these work:
+'   - a local path:            "C:\SLS Fee Forms\SLS Fee Log.xlsx"
+'   - a OneDrive-synced path:  "C:\Users\you\OneDrive - Company\Team Site - Documents\SLS Fee Log.xlsx"
+'   - the SharePoint web address of an EXISTING file, as given by Excel's
+'     File > Info > Copy path, e.g. "https://yourcompany.sharepoint.com/sites/Team/Shared Documents/SLS Fee Log.xlsx"
 Public Const LOG_PATH As String = "C:\SLS Fee Forms\SLS Fee Log.xlsx"
 Public Const LOG_SHEET As String = "FeeLog"
 
@@ -604,6 +607,8 @@ Private Function LogLinkUrl(ByVal wb As Object) As String
     On Error GoTo 0
     If LCase$(Left$(u, 4)) = "http" Then
         LogLinkUrl = u
+    ElseIf LCase$(Left$(LOG_PATH, 4)) = "http" Then
+        LogLinkUrl = LOG_PATH
     ElseIf Left$(LOG_PATH, 2) = "\\" Then
         LogLinkUrl = "file:///" & Replace(Replace(LOG_PATH, "\", "/"), " ", "%20")
     End If
@@ -737,10 +742,11 @@ End Function
 
 Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated As Boolean, _
                          ByRef wbOpened As Boolean) As Object
-    Dim w As Object, fname As String, ws As Object, h As Variant, fso As Object
+    Dim w As Object, fname As String, ws As Object, h As Variant, fso As Object, isUrl As Boolean
 
     Set fso = CreateObject("Scripting.FileSystemObject")
-    fname = fso.GetFileName(LOG_PATH)
+    isUrl = (LCase$(Left$(LOG_PATH, 4)) = "http")      ' a SharePoint web address
+    If isUrl Then fname = UrlFileName(LOG_PATH) Else fname = fso.GetFileName(LOG_PATH)
 
     On Error Resume Next
     Set xl = GetObject(, "Excel.Application")         ' use Excel if it's already open
@@ -755,7 +761,7 @@ Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated
     End If
 
     If wb Is Nothing Then
-        If fso.FileExists(LOG_PATH) Then
+        If isUrl Or fso.FileExists(LOG_PATH) Then
             Set wb = xl.Workbooks.Open(LOG_PATH)
         Else
             EnsureFolder fso.GetParentFolderName(LOG_PATH)
@@ -796,6 +802,16 @@ Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated
             "(or clear the sheet) and run again, so a log with the new columns is created."
     End If
     Set OpenLog = ws
+End Function
+
+' File name at the end of a web address, e.g. ".../SLS%20Fee%20Log.xlsx" -> "SLS Fee Log.xlsx"
+Private Function UrlFileName(ByVal u As String) As String
+    Dim p As Long
+    p = InStr(u, "?")
+    If p > 0 Then u = Left$(u, p - 1)
+    p = InStrRev(u, "/")
+    If p > 0 Then u = Mid$(u, p + 1)
+    UrlFileName = Replace(u, "%20", " ")
 End Function
 
 Private Sub WriteRow(ByVal ws As Object, ByVal v As Variant)
