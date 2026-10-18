@@ -19,7 +19,7 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '      month and in future months, grouped by month:
 '        - fees to be booked to P&L
 '        - fees sitting in Accounts Payable (GL 20122122); dropped once a later form
-'          for the same borrower books a P&L fee
+'          for the same borrower books the same amount to P&L
 '
 '  Macros you can run by hand (Alt+F8 in Outlook):
 '   TestOnePdf     - test the PDF reading on one saved form
@@ -563,7 +563,8 @@ Public Sub SendDigest()
     Dim data As Variant, r As Long, lastRow As Long, fromDate As Date
     Dim upcoming As New Collection, toPL As New Collection
     Dim st As String, bk As String, mail As Object, body As String, errMsg As String
-    Dim plLatest As Object, logUrl As String, fromTxt As String
+    Dim plLatest As Object, plSums As Object, logUrl As String, fromTxt As String
+    Dim ck As String, apDate As Date
 
     On Error GoTo Fail
     If DIGEST_AUTO_SEND And InStr(1, DIGEST_TO, "name1@company.com", vbTextCompare) > 0 Then
@@ -579,30 +580,42 @@ Public Sub SendDigest()
     lastRow = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row
     If lastRow >= 2 Then
         data = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, COLS)).Value
-        ' Latest P&L form per borrower. A later P&L form for the same borrower means
-        ' syndication has completed, so the earlier AP fee is no longer pending.
+        ' An AP fee is cleared when a LATER P&L form for the same borrower books the same
+        ' amount in the same currency. The match is tried on each P&L line, and on the P&L
+        ' total per currency for that form (in case the AP amount was split over several fees).
         Set plLatest = CreateObject("Scripting.Dictionary")
+        Set plSums = CreateObject("Scripting.Dictionary")
         For r = 1 To UBound(data, 1)
-            If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) Then
+            If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) And IsNumeric(data(r, 11)) Then
                 bk = LCase$(Trim$(CStr(data(r, 5))))
                 If Len(bk) > 0 Then
-                    If Not plLatest.Exists(bk) Then
-                        plLatest(bk) = CDate(data(r, 2))
-                    ElseIf CDate(data(r, 2)) > plLatest(bk) Then
-                        plLatest(bk) = CDate(data(r, 2))
-                    End If
+                    ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 2)), "0.00000")
+                    plSums(ck) = plSums(ck) + CDbl(data(r, 11))
+                    ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 11)), "0.00")
+                    NoteLatest plLatest, ck, CDate(data(r, 2))
                 End If
             End If
         Next r
+        Dim sk As Variant, parts() As String
+        For Each sk In plSums.Keys
+            parts = Split(CStr(sk), "|")
+            ck = parts(0) & "|" & parts(1) & "|" & Format(plSums(sk), "0.00")
+            NoteLatest plLatest, ck, CDate(CDbl(parts(2)))
+        Next sk
 
         For r = 1 To UBound(data, 1)
             If InDigestWindow(data(r, 3), fromDate) Then
                 st = CStr(data(r, 12))
                 If Left$(st, 8) = "Upcoming" Then
                     bk = LCase$(Trim$(CStr(data(r, 5))))
-                    If Not (plLatest.Exists(bk) And IsDate(data(r, 2))) Then
+                    ck = ""
+                    If IsNumeric(data(r, 11)) Then _
+                        ck = bk & "|" & UCase$(Trim$(CStr(data(r, 10)))) & "|" & Format(CDbl(data(r, 11)), "0.00")
+                    If Len(ck) = 0 Or Not IsDate(data(r, 2)) Then
                         upcoming.Add DigestLine(data, r)
-                    ElseIf plLatest(bk) <= CDate(data(r, 2)) Then
+                    ElseIf Not plLatest.Exists(ck) Then
+                        upcoming.Add DigestLine(data, r)
+                    ElseIf plLatest(ck) <= CDate(data(r, 2)) Then
                         upcoming.Add DigestLine(data, r)
                     End If
                 ElseIf Left$(st, 12) = "Consolidated" Then
@@ -649,6 +662,15 @@ Cleanup:
     On Error GoTo 0
     If Len(errMsg) > 0 Then MsgBox "The SLS fee digest stopped with an error:" & vbCrLf & errMsg, _
         vbExclamation, "SLS fee digest"
+End Sub
+
+' Keeps the latest date seen for a key
+Private Sub NoteLatest(ByVal d As Object, ByVal k As String, ByVal v As Date)
+    If Not d.Exists(k) Then
+        d(k) = v
+    ElseIf v > d(k) Then
+        d(k) = v
+    End If
 End Sub
 
 ' True if the form date is on/after fromDate (a form whose date couldn't be read is kept in)
