@@ -18,7 +18,7 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '   2. Digest (weekly by default): emails a summary of the fee forms dated this
 '      month and in future months, grouped by month:
 '        - fees to be booked to P&L
-'        - fees sitting in Accounts Payable (GL 20122122); dropped once a later form
+'        - fees sitting in Accounts Payable (GL 20122122 or 24101009); dropped once a later form
 '          for the same borrower books the amount to P&L (part-cleared AP shows what is left)
 '
 '  Macros you can run by hand (Alt+F8 in Outlook):
@@ -80,7 +80,7 @@ Public Const DIGEST_SUBJECT As String = "SLS Fee Digest"
 
 Private Const CAT_DONE As String = "SLS Logged"
 Private Const CAT_REVIEW As String = "SLS Review"
-Private Const AP_GL As String = "20122122"
+Private Const AP_GLS As String = "20122122,24101009"   ' GL accounts treated as Accounts Payable
 Private Const APP_KEY As String = "SLSFeeAutomation"
 Private Const XL_UP As Long = -4162
 Private Const COLS As Long = 15
@@ -286,7 +286,7 @@ Private Sub RemoveCategory(ByVal m As Object, ByVal cat As String)
 End Sub
 
 Private Function FeeStatus(ByVal gl As String) As String
-    If gl = AP_GL Then
+    If InStr("," & AP_GLS & ",", "," & Trim$(gl) & ",") > 0 Then
         FeeStatus = "Upcoming - pending syndication"
     ElseIf gl = "GST" Then
         FeeStatus = "GST"
