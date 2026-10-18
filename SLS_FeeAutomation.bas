@@ -15,10 +15,11 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '      saves the PDF, reads it through Word, and writes one row per
 '      fee line into an Excel log. Processed emails get the Outlook
 '      category "SLS Logged" so they are never logged twice.
-'   2. Digest (weekly by default): emails a summary of
-'        - fees to expect (GL 20122122, booked to AP; dropped once a later form for
-'          the same borrower books a P&L fee)
-'        - fees booked to P&L in the last 7 days
+'   2. Digest (weekly by default): emails a summary of the fee forms dated this
+'      month and in future months, grouped by month:
+'        - fees to be booked to P&L
+'        - fees sitting in Accounts Payable (GL 20122122); dropped once a later form
+'          for the same borrower books a P&L fee
 '
 '  Macros you can run by hand (Alt+F8 in Outlook):
 '   TestOnePdf     - test the PDF reading on one saved form
@@ -55,8 +56,9 @@ Public Const LOG_SHEET As String = "FeeLog"
 ' Digest email
 Public Const DIGEST_TO As String = "name1@company.com; name2@company.com"
 Public Const DIGEST_CC As String = ""
-Public Const DIGEST_AUTO_SEND As Boolean = False  ' False = opens a draft for you to check and send
-Public Const DIGEST_LOOKBACK_DAYS As Long = 7     ' "booked to P&L in the last X days"
+Public Const DIGEST_AUTO_SEND As Boolean = True   ' True = sends by itself; False = opens a draft to check
+Public Const DIGEST_SKIP_IF_EMPTY As Boolean = True ' True = don't auto-send an email with nothing in it
+Public Const DIGEST_MONTHS_BACK As Long = 0       ' 0 = fee forms dated this month onwards; 1 = also last month
 Public Const LOG_LINK As String = ""              ' optional: overrides the automatic link to the log
 
 ' Schedule (used by SetupSchedule)
@@ -524,18 +526,27 @@ End Sub
 
 Public Sub SendDigest()
     Dim xl As Object, wb As Object, ws As Object, xlCreated As Boolean, wbOpened As Boolean
-    Dim data As Variant, r As Long, lastRow As Long
-    Dim upcoming As New Collection, recent As New Collection
+    Dim data As Variant, r As Long, lastRow As Long, fromDate As Date
+    Dim upcoming As New Collection, toPL As New Collection
     Dim st As String, bk As String, mail As Object, body As String, errMsg As String
-    Dim plLatest As Object, logUrl As String
+    Dim plLatest As Object, logUrl As String, fromTxt As String
 
     On Error GoTo Fail
+    If DIGEST_AUTO_SEND And InStr(1, DIGEST_TO, "name1@company.com", vbTextCompare) > 0 Then
+        Err.Raise vbObjectError + 1002, "SLS_FeeAutomation", _
+            "DIGEST_TO still has the example addresses. Put the real recipients in the settings first."
+    End If
+
+    ' Only fee forms dated from the start of this month (or earlier, if DIGEST_MONTHS_BACK > 0)
+    fromDate = DateSerial(Year(Date), Month(Date) - DIGEST_MONTHS_BACK, 1)
+    fromTxt = Format(fromDate, "mmm yyyy")
+
     Set ws = OpenLog(xl, wb, xlCreated, wbOpened)
     lastRow = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row
     If lastRow >= 2 Then
         data = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, COLS)).Value
         ' Latest P&L form per borrower. A later P&L form for the same borrower means
-        ' syndication has completed, so the earlier AP fee is no longer "to expect".
+        ' syndication has completed, so the earlier AP fee is no longer pending.
         Set plLatest = CreateObject("Scripting.Dictionary")
         For r = 1 To UBound(data, 1)
             If Left$(CStr(data(r, 12)), 12) = "Consolidated" And IsDate(data(r, 2)) Then
@@ -551,36 +562,39 @@ Public Sub SendDigest()
         Next r
 
         For r = 1 To UBound(data, 1)
-            st = CStr(data(r, 12))
-            If Left$(st, 8) = "Upcoming" Then
-                bk = LCase$(Trim$(CStr(data(r, 5))))
-                If Not (plLatest.Exists(bk) And IsDate(data(r, 2))) Then
-                    upcoming.Add DigestLine(data, r)
-                ElseIf plLatest(bk) <= CDate(data(r, 2)) Then
-                    upcoming.Add DigestLine(data, r)
-                End If
-            ElseIf Left$(st, 12) = "Consolidated" Then
-                If IsDate(data(r, 1)) Then
-                    If CDate(data(r, 1)) >= Date - DIGEST_LOOKBACK_DAYS Then recent.Add DigestLine(data, r)
+            If InDigestWindow(data(r, 3), fromDate) Then
+                st = CStr(data(r, 12))
+                If Left$(st, 8) = "Upcoming" Then
+                    bk = LCase$(Trim$(CStr(data(r, 5))))
+                    If Not (plLatest.Exists(bk) And IsDate(data(r, 2))) Then
+                        upcoming.Add DigestLine(data, r)
+                    ElseIf plLatest(bk) <= CDate(data(r, 2)) Then
+                        upcoming.Add DigestLine(data, r)
+                    End If
+                ElseIf Left$(st, 12) = "Consolidated" Then
+                    toPL.Add DigestLine(data, r)
                 End If
             End If
         Next r
     End If
 
+    ' Nothing to report: don't send an empty email by itself
+    If DIGEST_AUTO_SEND And DIGEST_SKIP_IF_EMPTY And upcoming.Count = 0 And toPL.Count = 0 Then GoTo Cleanup
+
     body = "<div style=""font-family:Calibri,Arial,sans-serif;font-size:11pt"">" & _
-        "<p>Hi all,</p><p>Here is the latest summary of SLS loan fees from the fee forms received.</p>" & _
-        BuildSection(upcoming, "Fees to expect (booked to AP, pending syndication)", _
-            "Shown until a later fee form for the same borrower books the fee to P&L.") & _
-        BuildSection(recent, "Fees booked to P&L in the last " & DIGEST_LOOKBACK_DAYS & " days", "")
+        "<p>Hi all,</p><p>Here are the SLS loan fees on fee forms dated " & fromTxt & " onwards.</p>" & _
+        BuildSection(toPL, "Fees to be booked to P&L (" & fromTxt & " onwards)", "") & _
+        BuildSection(upcoming, "Fees in Accounts Payable, pending syndication (" & fromTxt & " onwards)", _
+            "Shown until a later fee form for the same borrower books the fee to P&L.")
     logUrl = LogLinkUrl(wb)
     If Len(logUrl) > 0 Then body = body & "<p>Full log: <a href=""" & logUrl & """>SLS Fee Log</a></p>"
-    body = body & "<p style=""color:#777777;font-size:9pt"">Generated automatically from SLS fee forms. " & _
-        "Please reply if anything looks wrong.</p></div>"
+    body = body & "<p style=""color:#777777;font-size:9pt"">Generated automatically from SLS fee forms.</p></div>"
 
     Set mail = Application.CreateItem(0)
     mail.To = DIGEST_TO
     mail.CC = DIGEST_CC
-    mail.Subject = "SLS fee update - " & Format(Date, "dd mmm yyyy")
+    mail.Subject = "SLS fee form summary (" & fromTxt & " onwards) - To book to P&L: " & toPL.Count & _
+        " | In AP: " & upcoming.Count
     mail.HTMLBody = body
     If DIGEST_AUTO_SEND Then mail.Send Else mail.Display
     GoTo Cleanup
@@ -599,6 +613,11 @@ Cleanup:
     If Len(errMsg) > 0 Then MsgBox "The SLS fee digest stopped with an error:" & vbCrLf & errMsg, _
         vbExclamation, "SLS fee digest"
 End Sub
+
+' True if the form date is on/after fromDate (a form whose date couldn't be read is kept in)
+Private Function InDigestWindow(ByVal v As Variant, ByVal fromDate As Date) As Boolean
+    If IsDate(v) Then InDigestWindow = (CDate(v) >= fromDate) Else InDigestWindow = True
+End Function
 
 ' Link to the Excel log for the digest. Uses LOG_LINK if you set one; otherwise the web
 ' address Excel reports for a OneDrive/SharePoint-synced file; otherwise a network-drive link.
@@ -620,17 +639,28 @@ Private Function LogLinkUrl(ByVal wb As Object) As String
     End If
 End Function
 
-' Array(form date, borrower, segment, OIC/2IC, GL name, ccy, amount)
+' Array(form date, borrower, segment, OIC/2IC, GL name, ccy, amount, sort key, month label)
 Private Function DigestLine(d As Variant, ByVal r As Long) As Variant
-    Dim fd As String, amt As Double
-    If IsDate(d(r, 3)) Then fd = Format(d(r, 3), "dd-mmm-yyyy") Else fd = CStr(d(r, 3))
+    Dim fd As String, amt As Double, sk As Double, ml As String
+    If IsDate(d(r, 3)) Then
+        fd = Format(CDate(d(r, 3)), "dd-mmm-yyyy")
+        sk = CDbl(CDate(d(r, 3)))
+        ml = Format(CDate(d(r, 3)), "mmmm yyyy")
+    Else
+        fd = CStr(d(r, 3))
+        sk = 99999
+        ml = "Form date not read"
+    End If
     If IsNumeric(d(r, 11)) Then amt = CDbl(d(r, 11))
-    DigestLine = Array(fd, CStr(d(r, 5)), CStr(d(r, 4)), CStr(d(r, 7)), CStr(d(r, 9)), CStr(d(r, 10)), amt)
+    DigestLine = Array(fd, CStr(d(r, 5)), CStr(d(r, 4)), CStr(d(r, 7)), CStr(d(r, 9)), CStr(d(r, 10)), amt, sk, ml)
 End Function
 
+' One table: rows sorted by form date, grouped under a heading per month,
+' with totals per currency for each month (and overall if there is more than one month)
 Private Function BuildSection(ByVal items As Collection, ByVal title As String, ByVal note As String) As String
-    Dim h As String, it As Variant, tot As Object, k As Variant
-    Set tot = CreateObject("Scripting.Dictionary")
+    Dim h As String, it As Variant, tmp As Variant, arr() As Variant
+    Dim i As Long, j As Long, n As Long, nMonths As Long, cur As String, cc As String
+    Dim monTot As Object, allTot As Object
 
     h = "<h3 style=""font-family:Calibri,Arial,sans-serif;color:#c0392b;margin:18px 0 4px"">" & HtmlEsc(title) & "</h3>"
     If Len(note) > 0 Then h = h & "<p style=""font-size:10pt;color:#555555;margin:0 0 6px"">" & HtmlEsc(note) & "</p>"
@@ -639,21 +669,60 @@ Private Function BuildSection(ByVal items As Collection, ByVal title As String, 
         Exit Function
     End If
 
+    ' Sort by form date (oldest first)
+    n = items.Count
+    ReDim arr(1 To n)
+    For i = 1 To n
+        arr(i) = items(i)
+    Next i
+    For i = 2 To n
+        tmp = arr(i)
+        j = i - 1
+        Do While j >= 1
+            If arr(j)(7) <= tmp(7) Then Exit Do
+            arr(j + 1) = arr(j)
+            j = j - 1
+        Loop
+        arr(j + 1) = tmp
+    Next i
+
+    Set allTot = CreateObject("Scripting.Dictionary")
     h = h & "<table style=""border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:10.5pt"">"
     h = h & "<tr>" & HtmlCell("Form date", True) & HtmlCell("Borrower", True) & HtmlCell("Segment", True) & _
         HtmlCell("Syndications OIC/2IC", True) & HtmlCell("Fee", True) & HtmlCell("Ccy", True) & HtmlCell("Amount", True, True) & "</tr>"
-    For Each it In items
+
+    For i = 1 To n
+        it = arr(i)
+        If CStr(it(8)) <> cur Then
+            If Len(cur) > 0 Then h = h & TotalRows(monTot, "Total " & cur)
+            cur = CStr(it(8))
+            nMonths = nMonths + 1
+            Set monTot = CreateObject("Scripting.Dictionary")
+            h = h & "<tr><td colspan=""7"" style=""border:1px solid #bfbfbf;padding:4px 8px;font-weight:bold;" & _
+                "background:#fde8e4"">" & HtmlEsc(cur) & "</td></tr>"
+        End If
         h = h & "<tr>" & HtmlCell(CStr(it(0))) & HtmlCell(CStr(it(1))) & HtmlCell(CStr(it(2))) & _
             HtmlCell(CStr(it(3))) & HtmlCell(CStr(it(4))) & HtmlCell(CStr(it(5))) & _
             HtmlCell(Format(it(6), "#,##0.00"), False, True) & "</tr>"
-        tot(CStr(it(5))) = tot(CStr(it(5))) + it(6)
-    Next it
+        cc = CStr(it(5))
+        monTot(cc) = monTot(cc) + it(6)
+        allTot(cc) = allTot(cc) + it(6)
+    Next i
+    h = h & TotalRows(monTot, "Total " & cur)
+    If nMonths > 1 Then h = h & TotalRows(allTot, "Total, all months")
+    BuildSection = h & "</table>"
+End Function
+
+' Total rows, one per currency
+Private Function TotalRows(ByVal tot As Object, ByVal label As String) As String
+    Dim k As Variant, h As String
     For Each k In tot.Keys
         h = h & "<tr><td colspan=""5"" style=""border:1px solid #bfbfbf;padding:4px 8px;font-weight:bold;" & _
-            "background:#f2f2f2"">Total " & HtmlEsc(CStr(k)) & "</td>" & HtmlCell(CStr(k), False, False, True) & _
+            "background:#f2f2f2"">" & HtmlEsc(label & " - " & CStr(k)) & "</td>" & _
+            HtmlCell(CStr(k), False, False, True) & _
             HtmlCell(Format(tot(k), "#,##0.00"), False, True, True) & "</tr>"
     Next k
-    BuildSection = h & "</table>"
+    TotalRows = h
 End Function
 
 Private Function HtmlCell(ByVal s As String, Optional ByVal isHead As Boolean = False, _
