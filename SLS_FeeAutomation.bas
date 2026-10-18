@@ -18,6 +18,7 @@ Option Explicit
 '   RunSweepNow    - run the sweep now
 '   SendDigest     - build the digest email now
 '   SetupSchedule  - create the daily/weekly reminders (run once)
+'   ResetLoggedFlags - make the sweep re-log recent emails (after starting a new log)
 ' ====================================================================
 
 ' ------------------------- SETTINGS: EDIT THESE -------------------------
@@ -63,11 +64,11 @@ Private Const CAT_REVIEW As String = "SLS Review"
 Private Const AP_GL As String = "20122122"
 Private Const APP_KEY As String = "SLSFeeAutomation"
 Private Const XL_UP As Long = -4162
-Private Const COLS As Long = 17
+Private Const COLS As Long = 16
 
 Private Function LogHeaders() As Variant
-    LogHeaders = Array("Logged On", "Email Received", "Form Date", "Country", "IBG Contacts", _
-        "Borrower", "Deal Details", "RMs", "GL A/c", "GL Name", "Ccy", "Amount", _
+    LogHeaders = Array("Logged On", "Email Received", "Form Date", "Segment", _
+        "Borrower", "Deal Details", "Syndications OIC/2IC", "GL A/c", "GL Name", "Ccy", "Amount", _
         "Status", "Cleared (Y/N)", "Check", "Source PDF", "Email Subject")
 End Function
 
@@ -174,19 +175,63 @@ Private Function LogForm(ByVal pdfPath As String, ByVal m As Object, ByVal wdApp
     If IsDate(f("date")) Then fd = CDate(f("date")) Else fd = f("date")
 
     If f("lines").Count = 0 Then
-        WriteRow ws, Array(Now, m.ReceivedTime, fd, f("country"), f("contacts"), f("borrower"), _
-            f("deal"), f("rms"), "", "", "", "", "Needs review", "", chk, pdfPath, m.Subject)
+        WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
+            f("deal"), f("oic"), "", "", "", "", "Needs review", "", chk, pdfPath, m.Subject)
         nRows = nRows + 1
     Else
         For Each ln In f("lines")
-            WriteRow ws, Array(Now, m.ReceivedTime, fd, f("country"), f("contacts"), f("borrower"), _
-                f("deal"), f("rms"), ln(0), ln(1), ln(2), ln(3), FeeStatus(CStr(ln(0))), "", chk, _
+            WriteRow ws, Array(Now, m.ReceivedTime, fd, f("segment"), f("borrower"), _
+                f("deal"), f("oic"), ln(0), ln(1), ln(2), ln(3), FeeStatus(CStr(ln(0))), "", chk, _
                 pdfPath, m.Subject)
             nRows = nRows + 1
         Next ln
     End If
     LogForm = (Len(chk) = 0)
 End Function
+
+' Removes the "SLS Logged" / "SLS Review" categories from recent fee form emails,
+' so the next sweep logs them again (use after starting a fresh log file)
+Public Sub ResetLoggedFlags()
+    Dim fld As Object, itms As Object, itm As Object, i As Long, n As Long, cutoff As Date
+    If MsgBox("This removes the '" & CAT_DONE & "' and '" & CAT_REVIEW & "' categories from fee form emails " & _
+        "received in the last " & LOOKBACK_DAYS & " days, so the next sweep logs them again." & vbCrLf & vbCrLf & _
+        "Only do this after starting a fresh log file. Continue?", vbYesNo + vbQuestion, _
+        "SLS fee automation") <> vbYes Then Exit Sub
+    Set fld = GetFeeFolder()
+    If fld Is Nothing Then Exit Sub
+    cutoff = Now - LOOKBACK_DAYS
+    Set itms = fld.Items
+    itms.Sort "[ReceivedTime]", True
+    For i = 1 To itms.Count
+        Set itm = itms(i)
+        If TypeName(itm) = "MailItem" Then
+            If itm.ReceivedTime < cutoff Then Exit For
+            If InStr(1, itm.Subject, SUBJECT_KEYWORD, vbTextCompare) > 0 Then
+                If Len(itm.Categories) > 0 Then
+                    RemoveCategory itm, CAT_DONE
+                    RemoveCategory itm, CAT_REVIEW
+                    itm.Save
+                    n = n + 1
+                End If
+            End If
+        End If
+    Next i
+    SaveSetting APP_KEY, "Run", "LastSweep", ""
+    MsgBox "Reset " & n & " email(s). Run RunSweepNow to log them again.", vbInformation, "SLS fee automation"
+End Sub
+
+Private Sub RemoveCategory(ByVal m As Object, ByVal cat As String)
+    Dim parts() As String, i As Long, out As String
+    If Len(m.Categories) = 0 Then Exit Sub
+    parts = Split(Replace(m.Categories, ";", ","), ",")
+    For i = 0 To UBound(parts)
+        If StrComp(Trim$(parts(i)), cat, vbTextCompare) <> 0 Then
+            If Len(out) > 0 Then out = out & ", "
+            out = out & Trim$(parts(i))
+        End If
+    Next i
+    m.Categories = out
+End Sub
 
 Private Function FeeStatus(ByVal gl As String) As String
     If gl = AP_GL Then
@@ -202,7 +247,7 @@ End Function
 '  PDF READING (opens the PDF in Word, which converts it to editable tables)
 ' ========================================================================
 
-' Returns a Dictionary: date, borrower, deal, rms, country, contacts, lines (Collection of
+' Returns a Dictionary: date, borrower, deal, oic, segment, lines (Collection of
 ' Array(GL, GL name, Ccy, Amount)), check (text; empty = all good)
 Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As Object
     Dim res As Object, doc As Object, t As Object, c As Object
@@ -212,17 +257,18 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
     Dim s As String, rowTxt As String, j As Long, glIdx As Long
     Dim amt As Double, total As Double, sumLines As Double, hasTotal As Boolean
     Dim check As String, errD As String
+    Dim lbl As String, v As String
 
     Set res = CreateObject("Scripting.Dictionary")
     Set lines = New Collection
     Set vals = New Collection
-    res("date") = "": res("borrower") = "": res("deal") = "": res("rms") = ""
-    res("country") = "": res("contacts") = ""
+    res("date") = "": res("borrower") = "": res("deal") = "": res("oic") = ""
+    res("segment") = ""
 
     On Error GoTo Fail
     Set doc = wdApp.Documents.Open(pdfPath, False, True, False)
 
-    ' "To: IBG - Australia: Mark Koh / Damien Tham"
+    ' The whole "To:" line, e.g. "IBG - Australia: Mark Koh / Damien Tham"
     ParseToLine doc.Content.Text, res
 
     ' Find the header table (Date / Borrower...) and the fee table (GL Name...)
@@ -232,17 +278,32 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
         If fee Is Nothing And InStr(s, "gl name") > 0 Then Set fee = t
     Next t
 
-    ' Header values in order: date, borrower, deal details, RMs
+    ' Header table, row by row: Date / Borrower Name / Deal Details, then the
+    ' Syndications OIC/2IC names (the box under Deal Details, which may have no label)
     If Not hdr Is Nothing Then
+        Set rowMap = CreateObject("Scripting.Dictionary")
         For Each c In hdr.Range.Cells
-            s = CleanCell(c.Range.Text)
-            If Len(s) > 0 And Not IsHeaderLabel(s) Then vals.Add s
-            If vals.Count >= 4 Then Exit For
+            If Not rowMap.Exists(c.RowIndex) Then rowMap.Add c.RowIndex, New Collection
+            rowMap(c.RowIndex).Add CleanCell(c.Range.Text)
         Next c
-        If vals.Count >= 1 Then res("date") = vals(1)
-        If vals.Count >= 2 Then res("borrower") = vals(2)
-        If vals.Count >= 3 Then res("deal") = vals(3)
-        If vals.Count >= 4 Then res("rms") = vals(4)
+        For Each k In rowMap.Keys
+            Set rc = rowMap(k)
+            lbl = "": v = ""
+            If rc.Count >= 2 Then
+                lbl = LCase$(rc(1)): v = rc(rc.Count)
+            ElseIf rc.Count = 1 Then
+                v = rc(1)
+            End If
+            If Left$(lbl, 4) = "date" Then
+                res("date") = v
+            ElseIf InStr(lbl, "borrower") > 0 Then
+                res("borrower") = v
+            ElseIf InStr(lbl, "deal") > 0 Then
+                res("deal") = v
+            ElseIf Len(v) > 0 Then
+                If Len(res("oic")) = 0 Then res("oic") = v Else res("oic") = res("oic") & "; " & v
+            End If
+        Next k
     Else
         check = AddNote(check, "Header table not found")
     End If
@@ -304,6 +365,8 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
     End If
     If Not IsDate(res("date")) Then check = AddNote(check, "Date not read")
     If Len(res("borrower")) = 0 Then check = AddNote(check, "Borrower not read")
+    If Len(res("oic")) = 0 Then check = AddNote(check, "Syndications OIC/2IC not read")
+    If Len(res("segment")) = 0 Then check = AddNote(check, "To line not read")
 
     Set res("lines") = lines
     res("check") = check
@@ -320,25 +383,17 @@ Fail:
 End Function
 
 Private Sub ParseToLine(ByVal s As String, ByVal res As Object)
-    Dim p As Long, e As Long, lineTxt As String, colonPos As Long, dashPos As Long
-    p = InStr(1, s, "To:", vbTextCompare)
-    If p = 0 Then Exit Sub
-    e = InStr(p, s, vbCr)
-    If e = 0 Then e = Len(s) + 1
-    lineTxt = Mid$(s, p + 3, e - p - 3)
-    lineTxt = Replace(lineTxt, ChrW(8211), "-")   ' en dash
-    lineTxt = Replace(lineTxt, ChrW(8212), "-")   ' em dash
-    colonPos = InStr(lineTxt, ":")
-    If colonPos > 0 Then
-        res("contacts") = CleanCell(Mid$(lineTxt, colonPos + 1))
-        lineTxt = Left$(lineTxt, colonPos - 1)
-    End If
-    dashPos = InStrRev(lineTxt, "-")
-    If dashPos > 0 Then
-        res("country") = CleanCell(Mid$(lineTxt, dashPos + 1))
-    Else
-        res("country") = CleanCell(lineTxt)
-    End If
+    Dim paras() As String, i As Long, p As String
+    paras = Split(s, vbCr)
+    For i = 0 To UBound(paras)
+        p = LTrim$(Replace(paras(i), Chr(160), " "))
+        If LCase$(Left$(p, 3)) = "to:" Then
+            res("segment") = CleanCell(Mid$(p, 4))
+            ' If the text sits on the next line, take that instead
+            If Len(res("segment")) = 0 And i < UBound(paras) Then res("segment") = CleanCell(paras(i + 1))
+            Exit Sub
+        End If
+    Next i
 End Sub
 
 ' Removes Word cell markers, line breaks and footnote markers like (3)
@@ -387,12 +442,11 @@ Public Sub TestOnePdf()
     Set f = ParseFeeForm(p, wdApp)
     wdApp.Quit 0
 
-    msg = "Country: " & f("country") & vbCrLf & _
-          "IBG contacts: " & f("contacts") & vbCrLf & _
+    msg = "Segment: " & f("segment") & vbCrLf & _
           "Date: " & f("date") & vbCrLf & _
           "Borrower: " & f("borrower") & vbCrLf & _
           "Deal: " & f("deal") & vbCrLf & _
-          "RMs: " & f("rms") & vbCrLf & vbCrLf & "Fee lines:" & vbCrLf
+          "Syndications OIC/2IC: " & f("oic") & vbCrLf & vbCrLf & "Fee lines:" & vbCrLf
     For Each ln In f("lines")
         msg = msg & "   " & ln(0) & " | " & ln(1) & " | " & ln(2) & " " & Format(ln(3), "#,##0.00") & vbCrLf
     Next ln
@@ -416,8 +470,8 @@ Public Sub SendDigest()
     If lastRow >= 2 Then
         data = ws.Range(ws.Cells(2, 1), ws.Cells(lastRow, COLS)).Value
         For r = 1 To UBound(data, 1)
-            st = CStr(data(r, 13))
-            cl = UCase$(Trim$(CStr(data(r, 14))))
+            st = CStr(data(r, 12))
+            cl = UCase$(Trim$(CStr(data(r, 13))))
             If Left$(st, 8) = "Upcoming" Then
                 If cl <> "Y" And cl <> "YES" Then upcoming.Add DigestLine(data, r)
             ElseIf Left$(st, 12) = "Consolidated" Then
@@ -460,12 +514,12 @@ Cleanup:
         vbExclamation, "SLS fee digest"
 End Sub
 
-' Array(form date, borrower, country, RMs, GL name, ccy, amount)
+' Array(form date, borrower, segment, OIC/2IC, GL name, ccy, amount)
 Private Function DigestLine(d As Variant, ByVal r As Long) As Variant
     Dim fd As String, amt As Double
     If IsDate(d(r, 3)) Then fd = Format(d(r, 3), "dd-mmm-yyyy") Else fd = CStr(d(r, 3))
-    If IsNumeric(d(r, 12)) Then amt = CDbl(d(r, 12))
-    DigestLine = Array(fd, CStr(d(r, 6)), CStr(d(r, 4)), CStr(d(r, 8)), CStr(d(r, 10)), CStr(d(r, 11)), amt)
+    If IsNumeric(d(r, 11)) Then amt = CDbl(d(r, 11))
+    DigestLine = Array(fd, CStr(d(r, 5)), CStr(d(r, 4)), CStr(d(r, 7)), CStr(d(r, 9)), CStr(d(r, 10)), amt)
 End Function
 
 Private Function BuildSection(ByVal items As Collection, ByVal title As String, ByVal note As String) As String
@@ -480,8 +534,8 @@ Private Function BuildSection(ByVal items As Collection, ByVal title As String, 
     End If
 
     h = h & "<table style=""border-collapse:collapse;font-family:Calibri,Arial,sans-serif;font-size:10.5pt"">"
-    h = h & "<tr>" & HtmlCell("Form date", True) & HtmlCell("Borrower", True) & HtmlCell("Country", True) & _
-        HtmlCell("RMs", True) & HtmlCell("Fee", True) & HtmlCell("Ccy", True) & HtmlCell("Amount", True, True) & "</tr>"
+    h = h & "<tr>" & HtmlCell("Form date", True) & HtmlCell("Borrower", True) & HtmlCell("Segment", True) & _
+        HtmlCell("Syndications OIC/2IC", True) & HtmlCell("Fee", True) & HtmlCell("Ccy", True) & HtmlCell("Amount", True, True) & "</tr>"
     For Each it In items
         h = h & "<tr>" & HtmlCell(CStr(it(0))) & HtmlCell(CStr(it(1))) & HtmlCell(CStr(it(2))) & _
             HtmlCell(CStr(it(3))) & HtmlCell(CStr(it(4))) & HtmlCell(CStr(it(5))) & _
@@ -634,11 +688,17 @@ Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated
         End With
         ws.Range("A:B").NumberFormat = "dd-mmm-yyyy hh:mm"
         ws.Range("C:C").NumberFormat = "dd-mmm-yyyy"
-        ws.Range("I:I").NumberFormat = "@"
-        ws.Range("L:L").NumberFormat = "#,##0.00"
-        ws.Range("A:Q").ColumnWidth = 16
-        ws.Range("G:G").ColumnWidth = 50
-        ws.Range("O:O").ColumnWidth = 30
+        ws.Range("H:H").NumberFormat = "@"
+        ws.Range("K:K").NumberFormat = "#,##0.00"
+        ws.Range("A:P").ColumnWidth = 16
+        ws.Range("D:D").ColumnWidth = 40
+        ws.Range("F:F").ColumnWidth = 50
+        ws.Range("G:G").ColumnWidth = 28
+        ws.Range("N:N").ColumnWidth = 30
+    ElseIf CStr(ws.Cells(1, 4).Value) <> "Segment" Then
+        Err.Raise vbObjectError + 1000, "SLS_FeeAutomation", _
+            "The Excel log still has the old column layout. Rename or move the old log file " & _
+            "(or clear the sheet) and run again, so a log with the new columns is created."
     End If
     Set OpenLog = ws
 End Function
