@@ -1,6 +1,12 @@
 Attribute VB_Name = "SLS_FeeAutomation"
 Option Explicit
 
+#If VBA7 Then
+Private Declare PtrSafe Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#Else
+Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
+#End If
+
 ' ====================================================================
 '  SLS FEE FORM AUTOMATION  (Outlook VBA)
 '
@@ -272,7 +278,7 @@ Private Function ParseFeeForm(ByVal pdfPath As String, ByVal wdApp As Object) As
     res("segment") = ""
 
     On Error GoTo Fail
-    Set doc = wdApp.Documents.Open(pdfPath, False, True, False)
+    Set doc = OpenPdfInWord(wdApp, pdfPath)
 
     ' The whole "To:" line, e.g. "IBG - Australia: Mark Koh / Damien Tham"
     ParseToLine doc.Content.Text, res
@@ -748,27 +754,23 @@ Private Function OpenLog(ByRef xl As Object, ByRef wb As Object, ByRef xlCreated
     isUrl = (LCase$(Left$(LOG_PATH, 4)) = "http")      ' a SharePoint web address
     If isUrl Then fname = UrlFileName(LOG_PATH) Else fname = fso.GetFileName(LOG_PATH)
 
-    On Error Resume Next
-    Set xl = GetObject(, "Excel.Application")         ' use Excel if it's already open
-    On Error GoTo 0
-    If xl Is Nothing Then
-        Set xl = CreateObject("Excel.Application")
-        xlCreated = True
-    Else
-        For Each w In xl.Workbooks
-            If LCase$(w.Name) = LCase$(fname) Then Set wb = w
-        Next w
-    End If
+    ' Use our own hidden Excel, so we never clash with a workbook you have open
+    Set xl = CreateObject("Excel.Application")
+    xlCreated = True
+    xl.Visible = False
+    xl.DisplayAlerts = False
 
-    If wb Is Nothing Then
-        If isUrl Or fso.FileExists(LOG_PATH) Then
-            Set wb = xl.Workbooks.Open(LOG_PATH)
-        Else
-            EnsureFolder fso.GetParentFolderName(LOG_PATH)
-            Set wb = xl.Workbooks.Add
-            wb.SaveAs LOG_PATH, 51                     ' .xlsx
-        End If
-        wbOpened = True
+    If isUrl Or fso.FileExists(LOG_PATH) Then
+        Set wb = OpenWorkbookRetry(xl, LOG_PATH)
+    Else
+        EnsureFolder fso.GetParentFolderName(LOG_PATH)
+        Set wb = xl.Workbooks.Add
+        wb.SaveAs LOG_PATH, 51                         ' .xlsx
+    End If
+    wbOpened = True
+    If wb.ReadOnly Then
+        Err.Raise vbObjectError + 1001, "SLS_FeeAutomation", _
+            "The Excel log opened as read-only. Close it everywhere (Excel, browser, other people) and try again."
     End If
 
     On Error Resume Next
@@ -814,6 +816,36 @@ Private Function UrlFileName(ByVal u As String) As String
     UrlFileName = Replace(u, "%20", " ")
 End Function
 
+' Opens the log, retrying if Excel is still busy starting up ("Call was rejected by callee")
+Private Function OpenWorkbookRetry(ByVal xl As Object, ByVal p As String) As Object
+    Dim tries As Long, n As Long, d As String
+    For tries = 1 To 6
+        On Error Resume Next
+        Set OpenWorkbookRetry = xl.Workbooks.Open(p)
+        n = Err.Number: d = Err.Description
+        On Error GoTo 0
+        If n = 0 Then Exit Function
+        If n <> -2147418111 And n <> -2147417846 Then Exit For
+        Sleep 2000
+    Next tries
+    Err.Raise n, "OpenWorkbookRetry", d
+End Function
+
+' Opens a PDF in Word, retrying if Word is still busy
+Private Function OpenPdfInWord(ByVal wdApp As Object, ByVal p As String) As Object
+    Dim tries As Long, n As Long, d As String
+    For tries = 1 To 6
+        On Error Resume Next
+        Set OpenPdfInWord = wdApp.Documents.Open(p, False, True, False)
+        n = Err.Number: d = Err.Description
+        On Error GoTo 0
+        If n = 0 Then Exit Function
+        If n <> -2147418111 And n <> -2147417846 Then Exit For
+        Sleep 2000
+    Next tries
+    Err.Raise n, "OpenPdfInWord", d
+End Function
+
 Private Sub WriteRow(ByVal ws As Object, ByVal v As Variant)
     Dim r As Long
     r = ws.Cells(ws.Rows.Count, 2).End(XL_UP).Row + 1
@@ -821,15 +853,23 @@ Private Sub WriteRow(ByVal ws As Object, ByVal v As Variant)
 End Sub
 
 Private Function StartWord() As Object
-    Dim w As Object
+    Dim w As Object, i As Long
     ' Stop Word's "converting your PDF" pop-up, which would block a hidden Word
     On Error Resume Next
     CreateObject("WScript.Shell").RegWrite _
         "HKCU\Software\Microsoft\Office\16.0\Word\Options\DisableConvertPdfWarning", 1, "REG_DWORD"
     On Error GoTo 0
     Set w = CreateObject("Word.Application")
-    w.Visible = False
+    On Error Resume Next
+    For i = 1 To 6                                     ' Word may still be starting up
+        Err.Clear
+        w.Visible = False
+        If Err.Number = 0 Then Exit For
+        Sleep 1000
+    Next i
+    Err.Clear
     w.DisplayAlerts = 0
+    On Error GoTo 0
     Set StartWord = w
 End Function
 
