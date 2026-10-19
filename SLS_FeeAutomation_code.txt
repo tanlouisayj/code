@@ -18,8 +18,8 @@ Private Declare Sub Sleep Lib "kernel32" (ByVal dwMilliseconds As Long)
 '   2. Digest (weekly by default): emails a summary of the fee forms dated this
 '      month and in future months, grouped by month. Each fee line is placed by the
 '      first digit of its GL account:
+'        - GL 5xxxxxxx = Upfront Fees   (shown first)
 '        - GL 4xxxxxxx = Amortised Fees
-'        - GL 5xxxxxxx = Upfront Fees
 '        - GL 2xxxxxxx = Accounts Payable; dropped once a later form for the same
 '          borrower and currency books the amount as an Amortised or Upfront fee
 '          (part-cleared AP shows what is left)
@@ -688,8 +688,8 @@ Public Sub SendDigest()
 
     body = "<div style=""font-family:Calibri,Arial,sans-serif;font-size:11pt"">" & _
         "<p>Hi all,</p><p>Here are the SLS loan fees on fee forms dated " & fromTxt & " onwards.</p>" & _
-        BuildSection(amortList, "Amortised Fees (" & fromTxt & " onwards)", "GL accounts starting with 4") & _
         BuildSection(upfrontList, "Upfront Fees (" & fromTxt & " onwards)", "GL accounts starting with 5") & _
+        BuildSection(amortList, "Amortised Fees (" & fromTxt & " onwards)", "GL accounts starting with 4") & _
         BuildSection(apList, "Accounts Payable, pending syndication (" & fromTxt & " onwards)", "GL accounts starting with 2")
     If nOther > 0 Then
         body = body & "<p style=""color:#c0392b"">Note: " & nOther & " fee line(s) have a GL account that does not start " & _
@@ -702,8 +702,8 @@ Public Sub SendDigest()
     Set mail = Application.CreateItem(0)
     mail.To = DIGEST_TO
     mail.CC = DIGEST_CC
-    mail.Subject = "SLS fee form summary (" & fromTxt & " onwards) - Amortised: " & amortList.Count & _
-        " | Upfront: " & upfrontList.Count & " | In AP: " & apList.Count
+    mail.Subject = "SLS fee form summary (" & fromTxt & " onwards) - Upfront: " & upfrontList.Count & _
+        " | Amortised: " & amortList.Count & " | In AP: " & apList.Count
     mail.HTMLBody = body
     If DIGEST_AUTO_SEND Then mail.Send Else mail.Display
     SaveSetting APP_KEY, "Run", "LastDigest", Format(Now, "yyyy-mm-dd hh:nn:ss")
